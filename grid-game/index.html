@@ -34,6 +34,13 @@
     // Horizontal center line: 2 pixels wide, full width
     const centerY = GRID_Y / 2 * TILE;
     ctx.fillRect(0, centerY, canvas.width, 2);
+
+    // Label the crossing point "0", just above and to the right so the lines don't cover it
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 16px sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "bottom";
+    ctx.fillText("0", centerX + 4, centerY - 4);
   </script>
 </body>
 </html>
