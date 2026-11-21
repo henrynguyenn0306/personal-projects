@@ -14,9 +14,10 @@
 
   <script>
     // Board size in squares (x = across, y = down)
-    const GRID_X = 200;
-    const GRID_Y = 100;
-    const TILE = 6; // size of one square in pixels
+    const GRID_X = 100;
+    const GRID_Y = 50;
+    const TILE = 12; // size of one square in pixels
+    const UNIT = TILE / 2; // one number step = half a square
 
     const canvas = document.getElementById("board");
     const ctx = canvas.getContext("2d");
@@ -57,7 +58,7 @@
     const xNumbers = [-100, -50, 50, 100];
     for (let i = 0; i < xNumbers.length; i++) {
       const value = xNumbers[i];
-      const onLineX = centerX + value * TILE;
+      const onLineX = centerX + value * UNIT;
 
       // End numbers use the screen edge so they are not cut off
       let textX = onLineX;
@@ -87,7 +88,7 @@
     const yNumbers = [50, 25, -25, -50];
     for (let i = 0; i < yNumbers.length; i++) {
       const value = yNumbers[i];
-      const onLineY = centerY - value * TILE;
+      const onLineY = centerY - value * UNIT;
 
       // End numbers use the screen edge so they are not cut off
       let textY = onLineY;
