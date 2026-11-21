@@ -41,6 +41,16 @@
     ctx.textAlign = "right";
     ctx.textBaseline = "top";
     ctx.fillText("0", centerX - 4, centerY + 4);
+
+    // Name the horizontal axis "x" at the left end, just above the line
+    ctx.textAlign = "left";
+    ctx.textBaseline = "bottom";
+    ctx.fillText("x", 4, centerY - 4);
+
+    // Name the vertical axis "y" at the top end, just to the right of the line
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText("y", centerX + 6, 4);
   </script>
 </body>
 </html>
