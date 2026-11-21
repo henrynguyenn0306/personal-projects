@@ -17,7 +17,7 @@
     const GRID_X = 120;
     const GRID_Y = 90;
     const TILE = 12; // size of one square in pixels
-    const UNIT = TILE; // one number step = one square
+    const UNIT = TILE / 2; // one number step = half a square
 
     const canvas = document.getElementById("board");
     const ctx = canvas.getContext("2d");
@@ -57,19 +57,18 @@
     // How many numbers to show on each side of the center
     const NUMBERS_PER_SIDE = 4;
 
-    // X labels: start at half the width (the edge), then keep halving
+    // X labels: split the edge (±GRID_X) into equal quarters
     const xSteps = [];
-    let xStep = GRID_X / 2;
-    for (let i = 0; i < NUMBERS_PER_SIDE; i++) {
-      xSteps.push(xStep);
-      xStep = xStep / 2;
+    const xEdge = GRID_X;
+    for (let k = 1; k <= NUMBERS_PER_SIDE; k++) {
+      xSteps.push(xEdge * k / NUMBERS_PER_SIDE);
     }
-    // Left side first (far to near), then the right side (near to far)
+    // Left side far to near, then the right side near to far
     const xNumbers = [];
-    for (let i = 0; i < xSteps.length; i++) {
+    for (let i = xSteps.length - 1; i >= 0; i--) {
       xNumbers.push(-xSteps[i]);
     }
-    for (let i = xSteps.length - 1; i >= 0; i--) {
+    for (let i = 0; i < xSteps.length; i++) {
       xNumbers.push(xSteps[i]);
     }
 
@@ -81,11 +80,11 @@
       // End numbers use the screen edge so they are not cut off
       let textX = onLineX;
       ctx.textAlign = "center";
-      if (value === -GRID_X / 2) {
+      if (value === -xEdge) {
         ctx.textAlign = "left";
         textX = 4;
       }
-      if (value === GRID_X / 2) {
+      if (value === xEdge) {
         ctx.textAlign = "right";
         textX = canvas.width - 4;
       }
@@ -102,19 +101,18 @@
       ctx.fillRect(tickX, centerY - 2, 2, 4);
     }
 
-    // Y labels: start at half the height (the edge), then keep halving
+    // Y labels: split the edge (±GRID_Y) into equal quarters. Up is positive.
     const ySteps = [];
-    let yStep = GRID_Y / 2;
-    for (let i = 0; i < NUMBERS_PER_SIDE; i++) {
-      ySteps.push(yStep);
-      yStep = yStep / 2;
+    const yEdge = GRID_Y;
+    for (let k = 1; k <= NUMBERS_PER_SIDE; k++) {
+      ySteps.push(yEdge * k / NUMBERS_PER_SIDE);
     }
-    // Up is positive: top side first (far to near), then the bottom side
+    // Top side far to near, then the bottom side near to far
     const yNumbers = [];
-    for (let i = 0; i < ySteps.length; i++) {
+    for (let i = ySteps.length - 1; i >= 0; i--) {
       yNumbers.push(ySteps[i]);
     }
-    for (let i = ySteps.length - 1; i >= 0; i--) {
+    for (let i = 0; i < ySteps.length; i++) {
       yNumbers.push(-ySteps[i]);
     }
 
@@ -126,11 +124,11 @@
       // End numbers use the screen edge so they are not cut off
       let textY = onLineY;
       ctx.textBaseline = "middle";
-      if (value === GRID_Y / 2) {
+      if (value === yEdge) {
         ctx.textBaseline = "top";
         textY = 4;
       }
-      if (value === -GRID_Y / 2) {
+      if (value === -yEdge) {
         ctx.textBaseline = "bottom";
         textY = canvas.height - 4;
       }
