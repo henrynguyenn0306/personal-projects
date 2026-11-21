@@ -63,7 +63,7 @@
     for (let k = 1; k <= NUMBERS_PER_SIDE; k++) {
       xSteps.push(xEdge * k / NUMBERS_PER_SIDE);
     }
-    // Left side far to near, then the right side near to far
+    // x is flipped: positive numbers on the left
     const xNumbers = [];
     for (let i = xSteps.length - 1; i >= 0; i--) {
       xNumbers.push(-xSteps[i]);
@@ -75,16 +75,16 @@
     // Numbers on the x line, counted from the center, drawn just below the line
     for (let i = 0; i < xNumbers.length; i++) {
       const value = xNumbers[i];
-      const onLineX = centerX + value * UNIT;
+      const onLineX = centerX - value * UNIT;
 
       // End numbers use the screen edge so they are not cut off
       let textX = onLineX;
       ctx.textAlign = "center";
-      if (value === -xEdge) {
+      if (value === xEdge) {
         ctx.textAlign = "left";
         textX = 4;
       }
-      if (value === xEdge) {
+      if (value === -xEdge) {
         ctx.textAlign = "right";
         textX = canvas.width - 4;
       }
