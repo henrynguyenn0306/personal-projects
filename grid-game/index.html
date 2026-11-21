@@ -22,13 +22,18 @@
     canvas.width = GRID_X * TILE;
     canvas.height = GRID_Y * TILE;
 
-    // Draw every square in the grid
-    for (let x = 0; x < GRID_X; x++) {
-      for (let y = 0; y < GRID_Y; y++) {
-        ctx.fillStyle = "#3a3a4a";
-        ctx.fillRect(x * TILE, y * TILE, TILE - 1, TILE - 1); // -1 leaves a gap so you can see the lines
-      }
-    }
+    // Fill the whole board with one color (no gaps between squares)
+    ctx.fillStyle = "#3a3a4a";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Vertical center line: 2 pixels wide, full height
+    const centerX = GRID_X / 2 * TILE;
+    ctx.fillStyle = "#ff5555";
+    ctx.fillRect(centerX, 0, 2, canvas.height);
+
+    // Horizontal center line: 2 pixels wide, full width
+    const centerY = GRID_Y / 2 * TILE;
+    ctx.fillRect(0, centerY, canvas.width, 2);
   </script>
 </body>
 </html>
