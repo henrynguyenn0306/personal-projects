@@ -54,10 +54,13 @@
     ctx.textBaseline = "top";
     ctx.fillText("y", centerX + 6, 4);
 
-    // X labels: start at half the width (the edge), then half that, then half again
+    // How many numbers to show on each side of the center
+    const NUMBERS_PER_SIDE = 4;
+
+    // X labels: start at half the width (the edge), then keep halving
     const xSteps = [];
     let xStep = GRID_X / 2;
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < NUMBERS_PER_SIDE; i++) {
       xSteps.push(xStep);
       xStep = xStep / 2;
     }
@@ -99,10 +102,10 @@
       ctx.fillRect(tickX, centerY - 2, 2, 4);
     }
 
-    // Y labels: start at half the height (the edge), then half that, then half again
+    // Y labels: start at half the height (the edge), then keep halving
     const ySteps = [];
     let yStep = GRID_Y / 2;
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < NUMBERS_PER_SIDE; i++) {
       ySteps.push(yStep);
       yStep = yStep / 2;
     }
