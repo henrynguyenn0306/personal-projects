@@ -52,6 +52,66 @@
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
     ctx.fillText("y", centerX + 6, 4);
+
+    // Numbers on the x line, counted from the center, drawn just below the line
+    const xNumbers = [-100, -50, 50, 100];
+    for (let i = 0; i < xNumbers.length; i++) {
+      const value = xNumbers[i];
+      const onLineX = centerX + value * TILE;
+
+      // End numbers use the screen edge so they are not cut off
+      let textX = onLineX;
+      ctx.textAlign = "center";
+      if (value === -100) {
+        ctx.textAlign = "left";
+        textX = 4;
+      }
+      if (value === 100) {
+        ctx.textAlign = "right";
+        textX = canvas.width - 4;
+      }
+      ctx.textBaseline = "top";
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(String(value), textX, centerY + 4);
+
+      // Small red tick on the line at this number
+      let tickX = onLineX;
+      if (tickX > canvas.width - 2) {
+        tickX = canvas.width - 2;
+      }
+      ctx.fillStyle = "#ff5555";
+      ctx.fillRect(tickX, centerY - 2, 2, 4);
+    }
+
+    // Numbers on the y line. Up is positive, like a math graph. Drawn just left of the line.
+    const yNumbers = [50, 25, -25, -50];
+    for (let i = 0; i < yNumbers.length; i++) {
+      const value = yNumbers[i];
+      const onLineY = centerY - value * TILE;
+
+      // End numbers use the screen edge so they are not cut off
+      let textY = onLineY;
+      ctx.textBaseline = "middle";
+      if (value === 50) {
+        ctx.textBaseline = "top";
+        textY = 4;
+      }
+      if (value === -50) {
+        ctx.textBaseline = "bottom";
+        textY = canvas.height - 4;
+      }
+      ctx.textAlign = "right";
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(String(value), centerX - 4, textY);
+
+      // Small red tick on the line at this number
+      let tickY = onLineY;
+      if (tickY > canvas.height - 2) {
+        tickY = canvas.height - 2;
+      }
+      ctx.fillStyle = "#ff5555";
+      ctx.fillRect(centerX - 2, tickY, 6, 2);
+    }
   </script>
 </body>
 </html>
