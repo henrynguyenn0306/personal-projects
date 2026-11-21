@@ -14,10 +14,10 @@
 
   <script>
     // Board size in squares (x = across, y = down)
-    const GRID_X = 100;
-    const GRID_Y = 50;
+    const GRID_X = 120;
+    const GRID_Y = 90;
     const TILE = 12; // size of one square in pixels
-    const UNIT = TILE / 2; // one number step = half a square
+    const UNIT = TILE; // one number step = one square
 
     const canvas = document.getElementById("board");
     const ctx = canvas.getContext("2d");
@@ -39,7 +39,7 @@
 
     // Label the crossing point "0" at the bottom-left so the lines don't cover it
     ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 16px sans-serif";
+    ctx.font = "bold 20px sans-serif";
     ctx.textAlign = "right";
     ctx.textBaseline = "top";
     ctx.fillText("0", centerX - 4, centerY + 4);
@@ -54,8 +54,23 @@
     ctx.textBaseline = "top";
     ctx.fillText("y", centerX + 6, 4);
 
+    // X labels: start at half the width (the edge), then half that, then half again
+    const xSteps = [];
+    let xStep = GRID_X / 2;
+    for (let i = 0; i < 3; i++) {
+      xSteps.push(xStep);
+      xStep = xStep / 2;
+    }
+    // Left side first (far to near), then the right side (near to far)
+    const xNumbers = [];
+    for (let i = 0; i < xSteps.length; i++) {
+      xNumbers.push(-xSteps[i]);
+    }
+    for (let i = xSteps.length - 1; i >= 0; i--) {
+      xNumbers.push(xSteps[i]);
+    }
+
     // Numbers on the x line, counted from the center, drawn just below the line
-    const xNumbers = [-100, -50, 50, 100];
     for (let i = 0; i < xNumbers.length; i++) {
       const value = xNumbers[i];
       const onLineX = centerX + value * UNIT;
@@ -63,11 +78,11 @@
       // End numbers use the screen edge so they are not cut off
       let textX = onLineX;
       ctx.textAlign = "center";
-      if (value === -100) {
+      if (value === -GRID_X / 2) {
         ctx.textAlign = "left";
         textX = 4;
       }
-      if (value === 100) {
+      if (value === GRID_X / 2) {
         ctx.textAlign = "right";
         textX = canvas.width - 4;
       }
@@ -84,8 +99,23 @@
       ctx.fillRect(tickX, centerY - 2, 2, 4);
     }
 
+    // Y labels: start at half the height (the edge), then half that, then half again
+    const ySteps = [];
+    let yStep = GRID_Y / 2;
+    for (let i = 0; i < 3; i++) {
+      ySteps.push(yStep);
+      yStep = yStep / 2;
+    }
+    // Up is positive: top side first (far to near), then the bottom side
+    const yNumbers = [];
+    for (let i = 0; i < ySteps.length; i++) {
+      yNumbers.push(ySteps[i]);
+    }
+    for (let i = ySteps.length - 1; i >= 0; i--) {
+      yNumbers.push(-ySteps[i]);
+    }
+
     // Numbers on the y line. Up is positive, like a math graph. Drawn just left of the line.
-    const yNumbers = [50, 25, -25, -50];
     for (let i = 0; i < yNumbers.length; i++) {
       const value = yNumbers[i];
       const onLineY = centerY - value * UNIT;
@@ -93,11 +123,11 @@
       // End numbers use the screen edge so they are not cut off
       let textY = onLineY;
       ctx.textBaseline = "middle";
-      if (value === 50) {
+      if (value === GRID_Y / 2) {
         ctx.textBaseline = "top";
         textY = 4;
       }
-      if (value === -50) {
+      if (value === -GRID_Y / 2) {
         ctx.textBaseline = "bottom";
         textY = canvas.height - 4;
       }
