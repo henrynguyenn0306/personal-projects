@@ -31,9 +31,9 @@
     const INTERACT_KEY_P2 = "Enter";
     // Shift+B opens the hidden battlefield viewer. Nothing in the room mentions it.
     const SECRET_VIEW_KEY = "KeyB";
-    const BATTLEFIELD_WIDTH = 120; // x runs from -60 to 60
-    const BATTLEFIELD_HEIGHT = 100; // y runs from -50 to 50, and up is positive
-    const PLAYER_SIZE = 10; // each player is a 10 by 10 circle
+    const FIELD_X_MAX = 120; // x runs from -120 to 120
+    const FIELD_Y_MAX = 100; // y runs from -100 to 100, and up is positive
+    const PLAYER_SIZE = 4; // diameter 4 units, so the radius is 2
     const BATTLEFIELD_STORAGE_KEY = "graphHowitzerBattlefield";
     const BATTLEFIELD_CHANNEL_NAME = "graph-howitzer";
     const ZOOM_WIDTH_RATIO = 0.85;
@@ -475,28 +475,13 @@
     }
 
     // Hidden map. It is not drawn in the rooms. The viewer tab reads this object.
-    function randomBetween(min, max) {
-      return min + Math.random() * (max - min);
-    }
-
     function makeBattlefield() {
-      const radius = PLAYER_SIZE / 2;
-      const halfW = BATTLEFIELD_WIDTH / 2;
-      const halfH = BATTLEFIELD_HEIGHT / 2;
       return {
-        width: BATTLEFIELD_WIDTH,
-        height: BATTLEFIELD_HEIGHT,
+        width: FIELD_X_MAX * 2,
+        height: FIELD_Y_MAX * 2,
         players: [
-          {
-            // Left half, at least one radius from the edges and from x = 0.
-            x: randomBetween(-halfW + radius, -radius),
-            y: randomBetween(-halfH + radius, halfH - radius)
-          },
-          {
-            // Right half, same padding.
-            x: randomBetween(radius, halfW - radius),
-            y: randomBetween(-halfH + radius, halfH - radius)
-          }
+          { x: -60, y: 0 },
+          { x: 60, y: 0 }
         ]
       };
     }

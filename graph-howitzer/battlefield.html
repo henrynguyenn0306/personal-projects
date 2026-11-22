@@ -13,7 +13,11 @@
 
   <script>
     // Same sizes as the game. x increases to the right. y increases up.
-    const PLAYER_SIZE = 10;
+    const FIELD_X_MAX = 120;
+    const FIELD_Y_MAX = 100;
+    const PLAYER_SIZE = 4;
+    const X_TICKS = [-FIELD_X_MAX, -90, -60, -30, 30, 60, 90, FIELD_X_MAX];
+    const Y_TICKS = [FIELD_Y_MAX, 75, 50, 25, -25, -50, -75, -FIELD_Y_MAX];
     const STORAGE_KEY = "graphHowitzerBattlefield";
     const CHANNEL_NAME = "graph-howitzer";
     const COLOR_BOARD = "#3a3a4a";
@@ -53,7 +57,8 @@
     }
 
     function boardView() {
-      const margin = 56;
+      // Keep the 240:200 shape and use as much of the window as the labels allow.
+      const margin = 8;
       const scale = Math.min(
         (canvas.width - margin * 2) / battlefield.width,
         (canvas.height - margin * 2) / battlefield.height
@@ -111,10 +116,17 @@
       ctx.fillRect(view.left, view.originY - 1, view.boardW, 2);
       ctx.fillRect(view.originX - 1, view.top, 2, view.boardH);
 
+      // Old-board ticks. Skip any that fall outside a saved map from before this size.
       const xEdge = battlefield.width / 2;
       const yEdge = battlefield.height / 2;
-      const xNumbers = [-xEdge, -xEdge / 2, xEdge / 2, xEdge];
-      const yNumbers = [yEdge, yEdge / 2, -yEdge / 2, -yEdge];
+      const xNumbers = [];
+      const yNumbers = [];
+      for (let i = 0; i < X_TICKS.length; i++) {
+        if (Math.abs(X_TICKS[i]) <= xEdge) xNumbers.push(X_TICKS[i]);
+      }
+      for (let i = 0; i < Y_TICKS.length; i++) {
+        if (Math.abs(Y_TICKS[i]) <= yEdge) yNumbers.push(Y_TICKS[i]);
+      }
 
       for (let i = 0; i < xNumbers.length; i++) {
         const value = xNumbers[i];
