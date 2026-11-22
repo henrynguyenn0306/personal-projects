@@ -82,8 +82,6 @@
       hand.y = canvas.height / 2;
       hand.placed = true;
       clampHand(hand, room);
-      pushHandOutOfMonitor(hand, getMonitorRect(room));
-      clampHand(hand, room);
     }
 
     // Match the canvas to the browser window, then keep the hands inside.
@@ -95,10 +93,6 @@
         centerHand(player1, rooms.left);
         centerHand(player2, rooms.right);
       } else {
-        clampHand(player1, rooms.left);
-        clampHand(player2, rooms.right);
-        pushHandOutOfMonitor(player1, getMonitorRect(rooms.left));
-        pushHandOutOfMonitor(player2, getMonitorRect(rooms.right));
         clampHand(player1, rooms.left);
         clampHand(player2, rooms.right);
       }
@@ -136,9 +130,7 @@
     function moveHand(hand, dir, dt, room) {
       hand.x += dir.x * HAND_SPEED * dt;
       hand.y += dir.y * HAND_SPEED * dt;
-      clampHand(hand, room);
-      // The monitor is solid, so a hand that hits it gets pushed back out.
-      pushHandOutOfMonitor(hand, getMonitorRect(room));
+      // Stations don't block the hand; only the middle wall does.
       clampHand(hand, room);
     }
 
@@ -196,6 +188,7 @@
       drawMonitor(rooms.left, player1);
       drawMonitor(rooms.right, player2);
 
+      // Drawn last so the hand appears on top of the stations.
       drawHand(player1, COLOR_P1);
       drawHand(player2, COLOR_P2);
     }
@@ -249,39 +242,7 @@
       };
     }
 
-    // Circle vs rectangle. Slide the hand out along the shortest path.
-    function pushHandOutOfMonitor(hand, rect) {
-      const closest = closestPointOnRect(hand.x, hand.y, rect);
-      const dx = hand.x - closest.x;
-      const dy = hand.y - closest.y;
-      const dist = Math.hypot(dx, dy);
-
-      // The center is inside the rectangle, so "closest" is the center itself.
-      if (dist === 0) {
-        const toLeft = hand.x - rect.x;
-        const toRight = rect.x + rect.width - hand.x;
-        const toTop = hand.y - rect.y;
-        const toBottom = rect.y + rect.height - hand.y;
-        if (toLeft <= toRight && toLeft <= toTop && toLeft <= toBottom) {
-          hand.x = rect.x - HAND_RADIUS;
-        } else if (toRight <= toTop && toRight <= toBottom) {
-          hand.x = rect.x + rect.width + HAND_RADIUS;
-        } else if (toTop <= toBottom) {
-          hand.y = rect.y - HAND_RADIUS;
-        } else {
-          hand.y = rect.y + rect.height + HAND_RADIUS;
-        }
-        return;
-      }
-
-      if (dist < HAND_RADIUS) {
-        const scale = (HAND_RADIUS - dist) / dist;
-        hand.x += dx * scale;
-        hand.y += dy * scale;
-      }
-    }
-
-    // True when this room's hand is near the outside of its own monitor.
+    // True when this room's hand is near or over its own monitor.
     function handIsNearMonitor(hand, rect) {
       const closest = closestPointOnRect(hand.x, hand.y, rect);
       const dist = Math.hypot(hand.x - closest.x, hand.y - closest.y);
