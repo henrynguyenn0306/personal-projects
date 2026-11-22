@@ -16,7 +16,10 @@
     // Sizes and colors live here so they are easy to change later
     const WALL_WIDTH = 20;
     const HAND_RADIUS = 30;
+    // Collision uses the palm circle, not the larger radius the fingers sit inside.
+    const HAND_HITBOX_RADIUS = 18;
     const HAND_SPEED = 250; // pixels per second
+    const COUNTDOWN_SECONDS = 10;
     const COLOR_ROOM_1 = "#1a2230";
     const COLOR_ROOM_2 = "#2a1c24";
     const COLOR_WALL = "#8d8d99";
@@ -55,12 +58,12 @@
       };
     }
 
-    // Keep the whole circle inside one room, including the screen edges.
+    // Keep the palm inside one room, including the screen edges.
     function clampHand(hand, room) {
-      let minX = room.left + HAND_RADIUS;
-      let maxX = room.right - HAND_RADIUS;
-      let minY = HAND_RADIUS;
-      let maxY = canvas.height - HAND_RADIUS;
+      let minX = room.left + HAND_HITBOX_RADIUS;
+      let maxX = room.right - HAND_HITBOX_RADIUS;
+      let minY = HAND_HITBOX_RADIUS;
+      let maxY = canvas.height - HAND_HITBOX_RADIUS;
 
       // A tiny window can be smaller than the hand. Sit in the middle then.
       if (minX > maxX) {
@@ -155,9 +158,9 @@
         ctx.fill();
       }
 
-      // Palm
+      // Palm. The hitbox is this circle, so the hand can reach the wall.
       ctx.beginPath();
-      ctx.arc(hand.x, hand.y, 18, 0, Math.PI * 2);
+      ctx.arc(hand.x, hand.y, HAND_HITBOX_RADIUS, 0, Math.PI * 2);
       ctx.fill();
     }
 
@@ -202,6 +205,7 @@
       if (dt > 0.05) dt = 0.05;
 
       update(dt);
+      updateCountdown(time);
       draw();
       requestAnimationFrame(frame);
     }
@@ -246,7 +250,7 @@
     function handIsNearMonitor(hand, rect) {
       const closest = closestPointOnRect(hand.x, hand.y, rect);
       const dist = Math.hypot(hand.x - closest.x, hand.y - closest.y);
-      return dist <= HAND_RADIUS + MONITOR_GLOW_DISTANCE;
+      return dist <= HAND_HITBOX_RADIUS + MONITOR_GLOW_DISTANCE;
     }
 
     function drawMonitor(room, player) {
@@ -283,13 +287,47 @@
       const start = Math.max(0, player.messages.length - maxLines);
       for (let i = start; i < player.messages.length; i++) {
         const line = i - start;
-        ctx.fillText(player.messages[i], screenX + 8, screenY + 6 + line * MONITOR_LINE_HEIGHT);
+        const entry = player.messages[i];
+        // A countdown line is an object so we can change its text without adding a new row.
+        const text = typeof entry === "string" ? entry : entry.text;
+        ctx.fillText(text, screenX + 8, screenY + 6 + line * MONITOR_LINE_HEIGHT);
       }
       ctx.restore();
     }
 
     addStatusMessage(player1, "> All systems ready.");
     addStatusMessage(player2, "> All systems ready.");
+
+    // One shared countdown, but each monitor keeps its own line so we can edit it in place.
+    function countdownText(secondsLeft) {
+      if (secondsLeft <= 0) return "> HOMD started.";
+      return "> Starting HOMD in " + secondsLeft + "s";
+    }
+
+    const countdownLines = [
+      { text: countdownText(COUNTDOWN_SECONDS) },
+      { text: countdownText(COUNTDOWN_SECONDS) }
+    ];
+    player1.messages.push(countdownLines[0]);
+    player2.messages.push(countdownLines[1]);
+
+    let countdownStartTime = -1;
+    let countdownSecondsLeft = COUNTDOWN_SECONDS;
+
+    // Uses the animation timestamp so the ticks stay one second apart.
+    function updateCountdown(time) {
+      if (countdownSecondsLeft === 0) return;
+      if (countdownStartTime < 0) countdownStartTime = time;
+      const elapsed = (time - countdownStartTime) / 1000;
+      let secondsLeft = COUNTDOWN_SECONDS - Math.floor(elapsed);
+      if (secondsLeft < 0) secondsLeft = 0;
+      if (secondsLeft === countdownSecondsLeft) return;
+      countdownSecondsLeft = secondsLeft;
+      const text = countdownText(secondsLeft);
+      for (let i = 0; i < countdownLines.length; i++) {
+        countdownLines[i].text = text;
+      }
+    }
 
     window.addEventListener("resize", resize);
     resize();
