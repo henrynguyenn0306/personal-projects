@@ -83,6 +83,13 @@
     const TOWER_MAX_RADIUS = 5;
     const OBSTACLE_CLEARANCE = 8; // empty units around each player's center
     const OBSTACLE_PLACE_TRIES = 8;
+    // How close an opponent must be to an obstacle edge to light the red ping.
+    const OBSTACLE_NEAR_DISTANCE = 3;
+    const RED_PING_SIZE = 16; // small square just outside the radar's top-right corner
+    const RED_PING_GAP = 4;
+    const RED_PING_BLINK_SECONDS = 0.4;
+    const COLOR_RED_PING_OFF = "#3a1518";
+    const COLOR_RED_PING_ON = "#ff2a2a";
 
     const canvas = document.getElementById("room");
     const ctx = canvas.getContext("2d");
@@ -382,6 +389,36 @@
       const screenH = rect.height - bezel * 2;
       const ownerIndex = player === player1 ? 0 : 1;
       drawRadarPicture(screenX, screenY, screenW, screenH, ownerIndex, false);
+      drawRedPing(room, rect, ownerIndex);
+    }
+
+    // Dark square beside the radar. Blinks red when the opponent is in radar range
+    // or within OBSTACLE_NEAR_DISTANCE of an obstacle. Off until H.O.W.L.E.R starts.
+    function drawRedPing(room, radarRect, ownerIndex) {
+      let x = radarRect.x + radarRect.width + RED_PING_GAP;
+      let y = radarRect.y;
+      const rightLimit = room.right - 4;
+      if (x + RED_PING_SIZE > rightLimit) {
+        x = radarRect.x + radarRect.width - RED_PING_SIZE;
+        y = radarRect.y - RED_PING_SIZE - RED_PING_GAP;
+      }
+      if (y < 4) y = 4;
+
+      let lit = false;
+      if (redPingActive(ownerIndex)) {
+        const step = Math.floor((frameTime / 1000) / RED_PING_BLINK_SECONDS);
+        lit = step % 2 === 0;
+      }
+      ctx.fillStyle = lit ? COLOR_RED_PING_ON : COLOR_RED_PING_OFF;
+      ctx.fillRect(x, y, RED_PING_SIZE, RED_PING_SIZE);
+    }
+
+    function redPingActive(ownerIndex) {
+      if (!machineStarted) return false;
+      const you = battlefield.players[ownerIndex];
+      const enemy = battlefield.players[1 - ownerIndex];
+      if (Math.hypot(enemy.x - you.x, enemy.y - you.y) <= RADAR_RANGE) return true;
+      return collidesWithObstacle(enemy.x, enemy.y, OBSTACLE_NEAR_DISTANCE);
     }
 
     // How many turns the sweep has made since H.O.W.L.E.R started. 0 points along +x.
@@ -803,6 +840,23 @@
       const radius = PLAYER_SIZE / 2;
       const distance = Math.hypot(x - player.x, y - player.y);
       return distance <= radius;
+    }
+
+    // Circle vs rectangle (building) and circle vs circle (tower).
+    // Future battlefield movement must use this so a player cannot walk through an obstacle.
+    function collidesWithObstacle(x, y, radius) {
+      const obstacles = battlefield.obstacles || [];
+      for (let i = 0; i < obstacles.length; i++) {
+        const obstacle = obstacles[i];
+        if (obstacle.type === "tower") {
+          if (Math.hypot(x - obstacle.x, y - obstacle.y) <= radius + obstacle.r) return true;
+          continue;
+        }
+        const nearestX = Math.max(obstacle.x - obstacle.w / 2, Math.min(x, obstacle.x + obstacle.w / 2));
+        const nearestY = Math.max(obstacle.y - obstacle.h / 2, Math.min(y, obstacle.y + obstacle.h / 2));
+        if (Math.hypot(x - nearestX, y - nearestY) <= radius) return true;
+      }
+      return false;
     }
 
     const battlefield = makeBattlefield();
