@@ -17,32 +17,15 @@
     const WALL_WIDTH = 20;
     const HAND_SPEED = 250; // pixels per second
     const COUNTDOWN_SECONDS = 10;
-    // Drawn hand. The hitbox is the box around the palm and every finger.
+    // Drawn hand. The hitbox is a square around the palm. Fingers may stick out.
     const PALM_RADIUS = 18;
+    const HAND_HITBOX_HALF = PALM_RADIUS;
     const FINGER_RADIUS = 7;
     const FINGER_SPOTS = [
       { x: -12, y: -16 },
       { x: 0, y: -18 },
       { x: 12, y: -16 }
     ];
-    const HAND_HALF_WIDTH = Math.max(
-      PALM_RADIUS,
-      Math.abs(FINGER_SPOTS[0].x) + FINGER_RADIUS,
-      Math.abs(FINGER_SPOTS[1].x) + FINGER_RADIUS,
-      Math.abs(FINGER_SPOTS[2].x) + FINGER_RADIUS
-    );
-    const HAND_TOP_EXTENT = Math.max(
-      PALM_RADIUS,
-      -FINGER_SPOTS[0].y + FINGER_RADIUS,
-      -FINGER_SPOTS[1].y + FINGER_RADIUS,
-      -FINGER_SPOTS[2].y + FINGER_RADIUS
-    );
-    const HAND_BOTTOM_EXTENT = Math.max(
-      PALM_RADIUS,
-      FINGER_SPOTS[0].y + FINGER_RADIUS,
-      FINGER_SPOTS[1].y + FINGER_RADIUS,
-      FINGER_SPOTS[2].y + FINGER_RADIUS
-    );
     const INTERACT_KEY_P1 = "e";
     const INTERACT_KEY_P2 = "Enter";
     const HINT_P1 = "Press E to view";
@@ -91,12 +74,12 @@
       };
     }
 
-    // Keep every drawn part of the hand inside one room, including the screen edges.
+    // Keep the palm square inside one room, including the screen edges.
     function clampHand(hand, room) {
-      let minX = room.left + HAND_HALF_WIDTH;
-      let maxX = room.right - HAND_HALF_WIDTH;
-      let minY = HAND_TOP_EXTENT;
-      let maxY = canvas.height - HAND_BOTTOM_EXTENT;
+      let minX = room.left + HAND_HITBOX_HALF;
+      let maxX = room.right - HAND_HITBOX_HALF;
+      let minY = HAND_HITBOX_HALF;
+      let maxY = canvas.height - HAND_HITBOX_HALF;
 
       // A tiny window can be smaller than the hand. Sit in the middle then.
       if (minX > maxX) {
@@ -186,7 +169,7 @@
     function drawHand(hand, color) {
       ctx.fillStyle = color;
 
-      // Fingers use FINGER_SPOTS, the same offsets the hitbox is built from.
+      // Fingers are only drawn. They are not part of the hitbox.
       for (let i = 0; i < FINGER_SPOTS.length; i++) {
         ctx.beginPath();
         ctx.arc(hand.x + FINGER_SPOTS[i].x, hand.y + FINGER_SPOTS[i].y, FINGER_RADIUS, 0, Math.PI * 2);
@@ -271,13 +254,13 @@
       };
     }
 
-    // The box around the whole drawn hand, measured from its center.
+    // Square around the palm. Fingers are outside this box on purpose.
     function handBox(hand) {
       return {
-        left: hand.x - HAND_HALF_WIDTH,
-        right: hand.x + HAND_HALF_WIDTH,
-        top: hand.y - HAND_TOP_EXTENT,
-        bottom: hand.y + HAND_BOTTOM_EXTENT
+        left: hand.x - HAND_HITBOX_HALF,
+        right: hand.x + HAND_HITBOX_HALF,
+        top: hand.y - HAND_HITBOX_HALF,
+        bottom: hand.y + HAND_HITBOX_HALF
       };
     }
 
