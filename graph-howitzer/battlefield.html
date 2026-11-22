@@ -25,6 +25,8 @@
     const COLOR_LABEL = "#ffffff";
     const COLOR_P1 = "#3d8bfd";
     const COLOR_P2 = "#ff8a3d";
+    const COLOR_BUILDING = "#8a8a96";
+    const COLOR_TOWER = "#c8c8d2";
 
     const canvas = document.getElementById("board");
     const ctx = canvas.getContext("2d");
@@ -168,6 +170,8 @@
       drawAxisLabel("x", view.left + view.boardW - 4, view.originY - 4, "right", "bottom");
       drawAxisLabel("y", view.originX + 6, view.top + 4, "left", "top");
 
+      drawObstacles(view);
+
       const colors = [COLOR_P1, COLOR_P2];
       const names = ["P1", "P2"];
       const radius = (PLAYER_SIZE / 2) * view.scale;
@@ -179,6 +183,25 @@
         ctx.arc(spot.x, spot.y, radius, 0, Math.PI * 2);
         ctx.fill();
         drawAxisLabel(names[i], spot.x + radius + 6, spot.y - radius - 2, "left", "bottom");
+      }
+    }
+
+    function drawObstacles(view) {
+      if (!battlefield.obstacles) return;
+      for (let i = 0; i < battlefield.obstacles.length; i++) {
+        const obstacle = battlefield.obstacles[i];
+        const spot = worldToScreen(obstacle.x, obstacle.y, view);
+        if (obstacle.type === "tower") {
+          ctx.fillStyle = COLOR_TOWER;
+          ctx.beginPath();
+          ctx.arc(spot.x, spot.y, obstacle.r * view.scale, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          ctx.fillStyle = COLOR_BUILDING;
+          const w = obstacle.w * view.scale;
+          const h = obstacle.h * view.scale;
+          ctx.fillRect(spot.x - w / 2, spot.y - h / 2, w, h);
+        }
       }
     }
 

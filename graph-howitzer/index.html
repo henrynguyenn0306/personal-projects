@@ -66,9 +66,23 @@
     // Battlefield units. The square shows everything within 20 units around this player.
     // The square's half-size maps to 20 units.
     const RADAR_RANGE = 20;
+    const RADAR_SWEEP_SECONDS = 3; // one full turn of the sweep line
+    const RADAR_TRAIL_STEPS = 8;
+    const RADAR_TRAIL_ANGLE = Math.PI / 3; // how much of the circle the fading trail covers
+    const RADAR_ENEMY_DOT_RATIO = 0.035; // enemy dot size compared with the radar half-size
     const COLOR_RADAR_SCREEN = "#04140a";
     const COLOR_RADAR_CROSS = "rgba(57, 255, 106, 0.28)";
     const COLOR_RADAR_YOU = "#d8ffe4";
+    const COLOR_RADAR_SWEEP = "#d8ffe4";
+    const COLOR_RADAR_ENEMY = "255, 64, 64";
+    const COLOR_RADAR_OBSTACLE = "150, 186, 160";
+    const OBSTACLE_COUNT = 12;
+    const BUILDING_MIN_SIZE = 4;
+    const BUILDING_MAX_SIZE = 14;
+    const TOWER_MIN_RADIUS = 2;
+    const TOWER_MAX_RADIUS = 5;
+    const OBSTACLE_CLEARANCE = 8; // empty units around each player's center
+    const OBSTACLE_PLACE_TRIES = 8;
 
     const canvas = document.getElementById("room");
     const ctx = canvas.getContext("2d");
@@ -77,8 +91,8 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false };
-    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false };
+    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "" };
+    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "" };
 
     // The wall sits in the middle. Each player owns one side of it.
     function getRooms() {
@@ -229,8 +243,8 @@
 
       drawMonitor(rooms.left, player1);
       drawMonitor(rooms.right, player2);
-      drawRadar(rooms.left);
-      drawRadar(rooms.right);
+      drawRadar(rooms.left, player1);
+      drawRadar(rooms.right, player2);
 
       // Drawn last so the hand appears on top of the stations.
       drawHand(player1, COLOR_P1);
@@ -242,7 +256,9 @@
     }
 
     let lastTime = 0;
+    let frameTime = 0;
     function frame(time) {
+      frameTime = time;
       // time is in milliseconds. dt is seconds since the previous frame.
       let dt = lastTime === 0 ? 0 : (time - lastTime) / 1000;
       lastTime = time;
@@ -348,32 +364,66 @@
     }
 
     // Radar sits beside the monitor. Half of the square is RADAR_RANGE units.
-    // The frame matches the monitor. The screen stays black until H.O.W.L.E.R starts.
-    // After that, the center dot is this player ("you").
+    // The frame matches the monitor and glows when the hand is near.
+    // The screen stays black until H.O.W.L.E.R starts.
+    // The small radar shows the sweep and the center dot only. Blips stay hidden here.
     // The hand passes over it; only the middle wall blocks movement.
-    function drawRadar(room) {
+    function drawRadar(room, player) {
       const rect = getRadarRect(room);
       const bezel = Math.min(MONITOR_BEZEL, rect.width / 4, rect.height / 4);
+      const near = handIsNearMonitor(player, rect);
 
-      ctx.fillStyle = COLOR_MONITOR_FRAME;
+      ctx.fillStyle = near ? COLOR_MONITOR_GLOW : COLOR_MONITOR_FRAME;
       ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
 
       const screenX = rect.x + bezel;
       const screenY = rect.y + bezel;
       const screenW = rect.width - bezel * 2;
       const screenH = rect.height - bezel * 2;
+      const ownerIndex = player === player1 ? 0 : 1;
+      drawRadarPicture(screenX, screenY, screenW, screenH, ownerIndex, false);
+    }
 
-      if (!machineStarted) {
-        ctx.fillStyle = COLOR_MONITOR_SCREEN;
-        ctx.fillRect(screenX, screenY, screenW, screenH);
-        return;
+    // How many turns the sweep has made since H.O.W.L.E.R started. 0 points along +x.
+    function sweepTurns() {
+      if (machineStartedAt < 0) return 0;
+      return (frameTime - machineStartedAt) / 1000 / RADAR_SWEEP_SECONDS;
+    }
+
+    // 1 when the sweep reaches this angle, then fades to 0 over one full turn.
+    function pingAlpha(dx, dy) {
+      let angle = Math.atan2(dy, dx);
+      if (angle < 0) angle += Math.PI * 2;
+      const targetTurns = angle / (Math.PI * 2);
+      const swept = sweepTurns();
+      if (swept < targetTurns) return 0;
+      const age = (swept - targetTurns) % 1;
+      return 1 - age;
+    }
+
+    function drawRadarSweep(centerX, centerY, radius) {
+      // Canvas y grows downward, so a y-up angle is negated.
+      const tip = -sweepTurns() * Math.PI * 2;
+      for (let i = RADAR_TRAIL_STEPS; i >= 1; i--) {
+        const from = tip + ((i - 1) / RADAR_TRAIL_STEPS) * RADAR_TRAIL_ANGLE;
+        const to = tip + (i / RADAR_TRAIL_STEPS) * RADAR_TRAIL_ANGLE;
+        const fade = 1 - i / RADAR_TRAIL_STEPS;
+        ctx.fillStyle = "rgba(57, 255, 106, " + (0.16 * fade).toFixed(3) + ")";
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY);
+        ctx.arc(centerX, centerY, radius, from, to);
+        ctx.closePath();
+        ctx.fill();
       }
+      ctx.strokeStyle = COLOR_RADAR_SWEEP;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(centerX, centerY);
+      ctx.lineTo(centerX + Math.cos(tip) * radius, centerY + Math.sin(tip) * radius);
+      ctx.stroke();
+    }
 
-      ctx.fillStyle = COLOR_RADAR_SCREEN;
-      ctx.fillRect(screenX, screenY, screenW, screenH);
-
-      const centerX = screenX + screenW / 2;
-      const centerY = screenY + screenH / 2;
+    function drawRadarCrosshair(screenX, screenY, screenW, screenH, centerX, centerY) {
       ctx.strokeStyle = COLOR_RADAR_CROSS;
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -382,11 +432,105 @@
       ctx.moveTo(centerX, screenY);
       ctx.lineTo(centerX, screenY + screenH);
       ctx.stroke();
+    }
+
+    // True when any part of the obstacle is inside this player's radar range.
+    function obstacleInRange(obstacle, you) {
+      if (obstacle.type === "tower") {
+        return Math.hypot(obstacle.x - you.x, obstacle.y - you.y) <= RADAR_RANGE + obstacle.r;
+      }
+      const nearestX = Math.max(obstacle.x - obstacle.w / 2, Math.min(you.x, obstacle.x + obstacle.w / 2));
+      const nearestY = Math.max(obstacle.y - obstacle.h / 2, Math.min(you.y, obstacle.y + obstacle.h / 2));
+      return Math.hypot(nearestX - you.x, nearestY - you.y) <= RADAR_RANGE;
+    }
+
+    function drawRadarBlips(centerX, centerY, rangePx, ownerIndex) {
+      const you = battlefield.players[ownerIndex];
+      const enemy = battlefield.players[1 - ownerIndex];
+      const scale = rangePx / RADAR_RANGE;
+      // The circle clip keeps only the part of each shape inside RADAR_RANGE.
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, rangePx, 0, Math.PI * 2);
+      ctx.clip();
+
+      const obstacles = battlefield.obstacles || [];
+      for (let i = 0; i < obstacles.length; i++) {
+        const obstacle = obstacles[i];
+        if (!obstacleInRange(obstacle, you)) continue;
+        const dx = obstacle.x - you.x;
+        const dy = obstacle.y - you.y;
+        const alpha = pingAlpha(dx, dy);
+        if (alpha <= 0) continue;
+        const spotX = centerX + dx * scale;
+        const spotY = centerY - dy * scale;
+        ctx.fillStyle = "rgba(" + COLOR_RADAR_OBSTACLE + ", " + alpha.toFixed(3) + ")";
+        if (obstacle.type === "tower") {
+          ctx.beginPath();
+          ctx.arc(spotX, spotY, obstacle.r * scale, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          const w = obstacle.w * scale;
+          const h = obstacle.h * scale;
+          ctx.fillRect(spotX - w / 2, spotY - h / 2, w, h);
+        }
+      }
+
+      const enemyDx = enemy.x - you.x;
+      const enemyDy = enemy.y - you.y;
+      if (Math.hypot(enemyDx, enemyDy) <= RADAR_RANGE) {
+        const alpha = pingAlpha(enemyDx, enemyDy);
+        if (alpha > 0) {
+          ctx.fillStyle = "rgba(" + COLOR_RADAR_ENEMY + ", " + alpha.toFixed(3) + ")";
+          ctx.beginPath();
+          ctx.arc(
+            centerX + enemyDx * scale,
+            centerY - enemyDy * scale,
+            Math.max(4, rangePx * RADAR_ENEMY_DOT_RATIO),
+            0,
+            Math.PI * 2
+          );
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+
+    // Both players read the battlefield the same way: x to the right, y up.
+    // Player 2 is not flipped. Kept simple on purpose.
+    function drawRadarPicture(screenX, screenY, screenW, screenH, ownerIndex, showBlips) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(screenX, screenY, screenW, screenH);
+      ctx.clip();
+
+      ctx.fillStyle = machineStarted ? COLOR_RADAR_SCREEN : COLOR_MONITOR_SCREEN;
+      ctx.fillRect(screenX, screenY, screenW, screenH);
+      if (!machineStarted) {
+        ctx.restore();
+        return;
+      }
+
+      const centerX = screenX + screenW / 2;
+      const centerY = screenY + screenH / 2;
+      const rangePx = Math.min(screenW, screenH) / 2;
+      if (!showBlips) drawRadarCrosshair(screenX, screenY, screenW, screenH, centerX, centerY);
+      if (showBlips) drawRadarBlips(centerX, centerY, rangePx, ownerIndex);
+      drawRadarSweep(centerX, centerY, Math.hypot(screenW, screenH) / 2);
 
       ctx.fillStyle = COLOR_RADAR_YOU;
       ctx.beginPath();
-      ctx.arc(centerX, centerY, 3, 0, Math.PI * 2);
+      ctx.arc(centerX, centerY, showBlips ? 5 : 3, 0, Math.PI * 2);
       ctx.fill();
+      ctx.restore();
+    }
+
+    function drawBigRadar(player, screenX, screenY, screenW, screenH) {
+      const size = Math.min(screenW, screenH);
+      const squareX = screenX + (screenW - size) / 2;
+      const squareY = screenY + (screenH - size) / 2;
+      const ownerIndex = player === player1 ? 0 : 1;
+      drawRadarPicture(squareX, squareY, size, size, ownerIndex, true);
     }
 
     function messageText(entry) {
@@ -438,15 +582,29 @@
       return x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height;
     }
 
-    // Open with the interact key while close to the monitor. Press it again to close.
+    // The nearer station within glow range, or "" if the hand is by neither.
+    function stationNearHand(player, room) {
+      const monitorGap = gapBetweenHandAndMonitor(player, getMonitorRect(room));
+      const radarGap = gapBetweenHandAndMonitor(player, getRadarRect(room));
+      const monitorNear = monitorGap <= MONITOR_GLOW_DISTANCE;
+      const radarNear = radarGap <= MONITOR_GLOW_DISTANCE;
+      if (monitorNear && radarNear) return monitorGap <= radarGap ? "monitor" : "radar";
+      if (monitorNear) return "monitor";
+      if (radarNear) return "radar";
+      return "";
+    }
+
+    // Open the station the hand is near. Press the same key again to close.
     function tryInteract(player, room) {
       if (player.panelOpen) {
         player.panelOpen = false;
+        player.panelKind = "";
         return;
       }
-      if (handIsNearMonitor(player, getMonitorRect(room))) {
-        player.panelOpen = true;
-      }
+      const kind = stationNearHand(player, room);
+      if (!kind) return;
+      player.panelOpen = true;
+      player.panelKind = kind;
     }
 
     function drawZoomPanel(room, player) {
@@ -466,7 +624,11 @@
       const screenH = panel.height - bezel * 2 - 8;
       ctx.fillStyle = COLOR_MONITOR_SCREEN;
       ctx.fillRect(screenX, screenY, screenW, screenH);
-      drawMessageList(player, screenX, screenY, screenW, screenH, ZOOM_FONT_SIZE, ZOOM_LINE_HEIGHT);
+      if (player.panelKind === "radar") {
+        drawBigRadar(player, screenX, screenY, screenW, screenH);
+      } else {
+        drawMessageList(player, screenX, screenY, screenW, screenH, ZOOM_FONT_SIZE, ZOOM_LINE_HEIGHT);
+      }
 
       const button = closeButtonRect(panel);
       ctx.fillStyle = "#222228";
@@ -536,6 +698,7 @@
     let countdownStartTime = -1;
     let countdownSecondsLeft = COUNTDOWN_SECONDS;
     let machineStarted = false;
+    let machineStartedAt = -1;
 
     // Uses the animation timestamp so the ticks stay one second apart.
     function updateCountdown(time) {
@@ -546,22 +709,92 @@
       if (secondsLeft < 0) secondsLeft = 0;
       if (secondsLeft === countdownSecondsLeft) return;
       countdownSecondsLeft = secondsLeft;
-      if (secondsLeft === 0) machineStarted = true;
+      if (secondsLeft === 0) {
+        machineStarted = true;
+        machineStartedAt = time;
+      }
       const text = countdownText(secondsLeft);
       for (let i = 0; i < countdownLines.length; i++) {
         countdownLines[i].text = text;
       }
     }
 
+    function randomRange(min, max) {
+      return min + Math.random() * (max - min);
+    }
+
+    // How far the shape sticks out from its center. Used to keep obstacles apart.
+    function obstacleReach(obstacle) {
+      if (obstacle.type === "tower") return obstacle.r;
+      return Math.hypot(obstacle.w / 2, obstacle.h / 2);
+    }
+
+    function randomObstacle(index) {
+      // Even numbers are buildings and odd numbers are towers, so the map has both.
+      if (index % 2 === 0) {
+        return {
+          type: "building",
+          x: 0,
+          y: 0,
+          w: randomRange(BUILDING_MIN_SIZE, BUILDING_MAX_SIZE),
+          h: randomRange(BUILDING_MIN_SIZE, BUILDING_MAX_SIZE)
+        };
+      }
+      return {
+        type: "tower",
+        x: 0,
+        y: 0,
+        r: randomRange(TOWER_MIN_RADIUS, TOWER_MAX_RADIUS)
+      };
+    }
+
+    function obstacleHitsPlayers(obstacle, players) {
+      const reach = obstacleReach(obstacle);
+      for (let i = 0; i < players.length; i++) {
+        const distance = Math.hypot(obstacle.x - players[i].x, obstacle.y - players[i].y);
+        if (distance < OBSTACLE_CLEARANCE + reach) return true;
+      }
+      return false;
+    }
+
+    function obstacleHitsAnother(obstacle, others) {
+      const reach = obstacleReach(obstacle);
+      for (let i = 0; i < others.length; i++) {
+        const distance = Math.hypot(obstacle.x - others[i].x, obstacle.y - others[i].y);
+        if (distance < reach + obstacleReach(others[i])) return true;
+      }
+      return false;
+    }
+
+    function makeObstacles(players) {
+      const obstacles = [];
+      for (let n = 0; n < OBSTACLE_COUNT; n++) {
+        let fallback = null;
+        for (let attempt = 0; attempt < OBSTACLE_PLACE_TRIES; attempt++) {
+          const obstacle = randomObstacle(n);
+          const reach = obstacleReach(obstacle);
+          obstacle.x = randomRange(-FIELD_X_MAX + reach, FIELD_X_MAX - reach);
+          obstacle.y = randomRange(-FIELD_Y_MAX + reach, FIELD_Y_MAX - reach);
+          if (obstacleHitsPlayers(obstacle, players)) continue;
+          fallback = obstacle;
+          if (!obstacleHitsAnother(obstacle, obstacles)) break;
+        }
+        if (fallback) obstacles.push(fallback);
+      }
+      return obstacles;
+    }
+
     // Hidden map. It is not drawn in the rooms. The viewer tab reads this object.
     function makeBattlefield() {
+      const players = [
+        { x: -60, y: 0 },
+        { x: 60, y: 0 }
+      ];
       return {
         width: FIELD_X_MAX * 2,
         height: FIELD_Y_MAX * 2,
-        players: [
-          { x: -60, y: 0 },
-          { x: 60, y: 0 }
-        ]
+        players: players,
+        obstacles: makeObstacles(players)
       };
     }
 
