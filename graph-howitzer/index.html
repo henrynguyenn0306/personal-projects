@@ -17,7 +17,8 @@
     const WALL_WIDTH = 20;
     const HAND_SPEED = 250; // pixels per second
     const COUNTDOWN_SECONDS = 10;
-    const MACHINE_NAME = "H.O.M.D";
+    // H.O.W.L.E.R = Heavy Ordnance Weapon, Launch-Equation Ranged (said "Howler")
+    const MACHINE_NAME = "H.O.W.L.E.R";
     // Drawn hand. The hitbox is a square around the palm. Fingers may stick out.
     const PALM_RADIUS = 18;
     const HAND_HITBOX_HALF = PALM_RADIUS;
@@ -347,7 +348,7 @@
     }
 
     // Radar sits beside the monitor. Half of the square is RADAR_RANGE units.
-    // The frame matches the monitor. The screen stays black until H.O.M.D starts.
+    // The frame matches the monitor. The screen stays black until H.O.W.L.E.R starts.
     // After that, the center dot is this player ("you").
     // The hand passes over it; only the middle wall blocks movement.
     function drawRadar(room) {
