@@ -17,6 +17,7 @@
     const WALL_WIDTH = 20;
     const HAND_SPEED = 250; // pixels per second
     const COUNTDOWN_SECONDS = 10;
+    const MACHINE_NAME = "H.O.M.D";
     // Drawn hand. The hitbox is a square around the palm. Fingers may stick out.
     const PALM_RADIUS = 18;
     const HAND_HITBOX_HALF = PALM_RADIUS;
@@ -28,8 +29,6 @@
     ];
     const INTERACT_KEY_P1 = "e";
     const INTERACT_KEY_P2 = "Enter";
-    const HINT_P1 = "Press E to view";
-    const HINT_P2 = "Press Enter to view";
     const ZOOM_WIDTH_RATIO = 0.85;
     const ZOOM_HEIGHT_RATIO = 0.7;
     const ZOOM_FONT_SIZE = 28;
@@ -61,8 +60,8 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, hint: HINT_P1 };
-    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, hint: HINT_P2 };
+    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false };
+    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false };
 
     // The wall sits in the middle. Each player owns one side of it.
     function getRooms() {
@@ -203,8 +202,8 @@
       ctx.fillStyle = COLOR_WALL;
       ctx.fillRect(rooms.wallX, 0, WALL_WIDTH, canvas.height);
 
-      drawLabel("Player 1 (WASD)", rooms.left);
-      drawLabel("Player 2 (Arrow keys)", rooms.right);
+      drawLabel("Player 1 (WASD, E to interact)", rooms.left);
+      drawLabel("Player 2 (Arrow keys, Enter to interact)", rooms.right);
 
       drawMonitor(rooms.left, player1);
       drawMonitor(rooms.right, player2);
@@ -299,15 +298,6 @@
       ctx.fillRect(screenX, screenY, screenW, screenH);
 
       drawMessageList(player, screenX, screenY, screenW, screenH, 16, MONITOR_LINE_HEIGHT);
-
-      // Hint sits under the small monitor, and only while this hand is close.
-      if (near) {
-        ctx.fillStyle = COLOR_LABEL;
-        ctx.font = "14px sans-serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "top";
-        ctx.fillText(player.hint, rect.x + rect.width / 2, rect.y + rect.height + 8);
-      }
     }
 
     function messageText(entry) {
@@ -443,8 +433,8 @@
 
     // One shared countdown, but each monitor keeps its own line so we can edit it in place.
     function countdownText(secondsLeft) {
-      if (secondsLeft <= 0) return "> HOMD started.";
-      return "> Starting HOMD in " + secondsLeft + "s";
+      if (secondsLeft <= 0) return "> " + MACHINE_NAME + " started.";
+      return "> Starting " + MACHINE_NAME + " in " + secondsLeft + "s";
     }
 
     const countdownLines = [
