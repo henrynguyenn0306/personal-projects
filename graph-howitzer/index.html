@@ -20,14 +20,18 @@
     // H.O.W.L.E.R = Heavy Ordnance Weapon, Launch-Equation Ranged (said "Howler")
     const MACHINE_NAME = "H.O.W.L.E.R";
     // Drawn hand. The hitbox is a square around the palm. Fingers may stick out.
-    const PALM_RADIUS = 18;
+    const PALM_RADIUS = 13;
     const HAND_HITBOX_HALF = PALM_RADIUS;
-    const FINGER_RADIUS = 7;
+    // Finger size and spots are fractions of the palm, from the old 18px hand.
+    const FINGER_RADIUS = PALM_RADIUS * (7 / 18);
     const FINGER_SPOTS = [
-      { x: -12, y: -16 },
-      { x: 0, y: -18 },
-      { x: 12, y: -16 }
+      { x: PALM_RADIUS * (-12 / 18), y: PALM_RADIUS * (-16 / 18) },
+      { x: 0, y: -PALM_RADIUS },
+      { x: PALM_RADIUS * (12 / 18), y: PALM_RADIUS * (-16 / 18) }
     ];
+    // While a station panel is open, the fingers tuck in like a fist.
+    const HOLD_FINGER_RADIUS_RATIO = 0.65;
+    const HOLD_FINGER_PULL = 0.45;
     const INTERACT_KEY_P1 = "e";
     const INTERACT_KEY_P2 = "Enter";
     // Shift+B opens the hidden battlefield viewer. Nothing in the room mentions it.
@@ -85,8 +89,7 @@
     const OBSTACLE_PLACE_TRIES = 8;
     // How close an opponent must be to an obstacle edge to light the red ping.
     const OBSTACLE_NEAR_DISTANCE = 3;
-    const RED_PING_SIZE = 16; // small square just outside the radar's top-right corner
-    const RED_PING_GAP = 4;
+    const RED_PING_SIZE = 16; // small square in the radar frame's bottom-right corner
     const RED_PING_BLINK_SECONDS = 0.4;
     const COLOR_RED_PING_OFF = "#3a1518";
     const COLOR_RED_PING_ON = "#ff2a2a";
@@ -210,11 +213,20 @@
 
     function drawHand(hand, color) {
       ctx.fillStyle = color;
+      const holding = hand.panelOpen;
+      const fingerRadius = holding ? FINGER_RADIUS * HOLD_FINGER_RADIUS_RATIO : FINGER_RADIUS;
+      const pull = holding ? HOLD_FINGER_PULL : 1;
 
       // Fingers are only drawn. They are not part of the hitbox.
       for (let i = 0; i < FINGER_SPOTS.length; i++) {
         ctx.beginPath();
-        ctx.arc(hand.x + FINGER_SPOTS[i].x, hand.y + FINGER_SPOTS[i].y, FINGER_RADIUS, 0, Math.PI * 2);
+        ctx.arc(
+          hand.x + FINGER_SPOTS[i].x * pull,
+          hand.y + FINGER_SPOTS[i].y * pull,
+          fingerRadius,
+          0,
+          Math.PI * 2
+        );
         ctx.fill();
       }
 
@@ -339,6 +351,13 @@
       };
     }
 
+    // Distance from the hand's center to a station rectangle. 0 means the center is inside.
+    function distanceFromHandCenter(hand, rect) {
+      const nearestX = Math.max(rect.x, Math.min(hand.x, rect.x + rect.width));
+      const nearestY = Math.max(rect.y, Math.min(hand.y, rect.y + rect.height));
+      return Math.hypot(hand.x - nearestX, hand.y - nearestY);
+    }
+
     // Gap between the hand's box and the monitor. 0 means they touch or overlap.
     function gapBetweenHandAndMonitor(hand, rect) {
       const box = handBox(hand);
@@ -354,7 +373,7 @@
 
     function drawMonitor(room, player) {
       const rect = getMonitorRect(room);
-      const near = handIsNearMonitor(player, rect);
+      const near = stationNearHand(player, room) === "monitor";
       const bezel = Math.min(MONITOR_BEZEL, rect.width / 4, rect.height / 4);
 
       ctx.fillStyle = near ? COLOR_MONITOR_GLOW : COLOR_MONITOR_FRAME;
@@ -378,7 +397,7 @@
     function drawRadar(room, player) {
       const rect = getRadarRect(room);
       const bezel = Math.min(MONITOR_BEZEL, rect.width / 4, rect.height / 4);
-      const near = handIsNearMonitor(player, rect);
+      const near = stationNearHand(player, room) === "radar";
 
       ctx.fillStyle = near ? COLOR_MONITOR_GLOW : COLOR_MONITOR_FRAME;
       ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
@@ -389,20 +408,15 @@
       const screenH = rect.height - bezel * 2;
       const ownerIndex = player === player1 ? 0 : 1;
       drawRadarPicture(screenX, screenY, screenW, screenH, ownerIndex, false);
-      drawRedPing(room, rect, ownerIndex);
+      drawRedPing(rect, ownerIndex);
     }
 
-    // Dark square beside the radar. Blinks red when the opponent is in radar range
-    // or within OBSTACLE_NEAR_DISTANCE of an obstacle. Off until H.O.W.L.E.R starts.
-    function drawRedPing(room, radarRect, ownerIndex) {
-      let x = radarRect.x + radarRect.width + RED_PING_GAP;
-      let y = radarRect.y;
-      const rightLimit = room.right - 4;
-      if (x + RED_PING_SIZE > rightLimit) {
-        x = radarRect.x + radarRect.width - RED_PING_SIZE;
-        y = radarRect.y - RED_PING_SIZE - RED_PING_GAP;
-      }
-      if (y < 4) y = 4;
+    // Small square in the bottom-right of the radar frame. It overlaps the bezel.
+    // Blinks red when the opponent is in radar range or near an obstacle.
+    // Off until H.O.W.L.E.R starts.
+    function drawRedPing(radarRect, ownerIndex) {
+      const x = radarRect.x + radarRect.width - RED_PING_SIZE;
+      const y = radarRect.y + radarRect.height - RED_PING_SIZE;
 
       let lit = false;
       if (redPingActive(ownerIndex)) {
@@ -619,13 +633,17 @@
       return x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height;
     }
 
-    // The nearer station within glow range, or "" if the hand is by neither.
+    // Only one station per player. If the hand is near both, the closer center wins.
     function stationNearHand(player, room) {
-      const monitorGap = gapBetweenHandAndMonitor(player, getMonitorRect(room));
-      const radarGap = gapBetweenHandAndMonitor(player, getRadarRect(room));
-      const monitorNear = monitorGap <= MONITOR_GLOW_DISTANCE;
-      const radarNear = radarGap <= MONITOR_GLOW_DISTANCE;
-      if (monitorNear && radarNear) return monitorGap <= radarGap ? "monitor" : "radar";
+      const monitor = getMonitorRect(room);
+      const radar = getRadarRect(room);
+      const monitorNear = handIsNearMonitor(player, monitor);
+      const radarNear = handIsNearMonitor(player, radar);
+      if (monitorNear && radarNear) {
+        const monitorDist = distanceFromHandCenter(player, monitor);
+        const radarDist = distanceFromHandCenter(player, radar);
+        return monitorDist <= radarDist ? "monitor" : "radar";
+      }
       if (monitorNear) return "monitor";
       if (radarNear) return "radar";
       return "";
