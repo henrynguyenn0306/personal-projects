@@ -15,11 +15,44 @@
   <script>
     // Sizes and colors live here so they are easy to change later
     const WALL_WIDTH = 20;
-    const HAND_RADIUS = 30;
-    // Collision uses the palm circle, not the larger radius the fingers sit inside.
-    const HAND_HITBOX_RADIUS = 18;
     const HAND_SPEED = 250; // pixels per second
     const COUNTDOWN_SECONDS = 10;
+    // Drawn hand. The hitbox is the box around the palm and every finger.
+    const PALM_RADIUS = 18;
+    const FINGER_RADIUS = 7;
+    const FINGER_SPOTS = [
+      { x: -12, y: -16 },
+      { x: 0, y: -18 },
+      { x: 12, y: -16 }
+    ];
+    const HAND_HALF_WIDTH = Math.max(
+      PALM_RADIUS,
+      Math.abs(FINGER_SPOTS[0].x) + FINGER_RADIUS,
+      Math.abs(FINGER_SPOTS[1].x) + FINGER_RADIUS,
+      Math.abs(FINGER_SPOTS[2].x) + FINGER_RADIUS
+    );
+    const HAND_TOP_EXTENT = Math.max(
+      PALM_RADIUS,
+      -FINGER_SPOTS[0].y + FINGER_RADIUS,
+      -FINGER_SPOTS[1].y + FINGER_RADIUS,
+      -FINGER_SPOTS[2].y + FINGER_RADIUS
+    );
+    const HAND_BOTTOM_EXTENT = Math.max(
+      PALM_RADIUS,
+      FINGER_SPOTS[0].y + FINGER_RADIUS,
+      FINGER_SPOTS[1].y + FINGER_RADIUS,
+      FINGER_SPOTS[2].y + FINGER_RADIUS
+    );
+    const INTERACT_KEY_P1 = "e";
+    const INTERACT_KEY_P2 = "Enter";
+    const HINT_P1 = "Press E to view";
+    const HINT_P2 = "Press Enter to view";
+    const ZOOM_WIDTH_RATIO = 0.85;
+    const ZOOM_HEIGHT_RATIO = 0.7;
+    const ZOOM_FONT_SIZE = 28;
+    const ZOOM_LINE_HEIGHT = 36;
+    const CLOSE_BUTTON_SIZE = 28;
+    const COLOR_ROOM_DIM = "rgba(0, 0, 0, 0.55)";
     const COLOR_ROOM_1 = "#1a2230";
     const COLOR_ROOM_2 = "#2a1c24";
     const COLOR_WALL = "#8d8d99";
@@ -45,8 +78,8 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false, messages: [] };
-    const player2 = { x: 0, y: 0, placed: false, messages: [] };
+    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, hint: HINT_P1 };
+    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, hint: HINT_P2 };
 
     // The wall sits in the middle. Each player owns one side of it.
     function getRooms() {
@@ -58,12 +91,12 @@
       };
     }
 
-    // Keep the palm inside one room, including the screen edges.
+    // Keep every drawn part of the hand inside one room, including the screen edges.
     function clampHand(hand, room) {
-      let minX = room.left + HAND_HITBOX_RADIUS;
-      let maxX = room.right - HAND_HITBOX_RADIUS;
-      let minY = HAND_HITBOX_RADIUS;
-      let maxY = canvas.height - HAND_HITBOX_RADIUS;
+      let minX = room.left + HAND_HALF_WIDTH;
+      let maxX = room.right - HAND_HALF_WIDTH;
+      let minY = HAND_TOP_EXTENT;
+      let maxY = canvas.height - HAND_BOTTOM_EXTENT;
 
       // A tiny window can be smaller than the hand. Sit in the middle then.
       if (minX > maxX) {
@@ -103,14 +136,20 @@
 
     // Letters ignore Shift. Arrow names stay as "ArrowUp" and so on.
     function keyName(event) {
-      if (event.key.indexOf("Arrow") === 0) return event.key;
+      if (event.key === INTERACT_KEY_P2 || event.key.indexOf("Arrow") === 0) return event.key;
       return event.key.toLowerCase();
     }
 
     window.addEventListener("keydown", function (event) {
-      // Arrow keys normally scroll the page. This game uses them to move.
-      if (event.key.indexOf("Arrow") === 0) event.preventDefault();
-      keys[keyName(event)] = true;
+      // Arrow keys scroll the page. Enter would activate a focused control.
+      if (event.key.indexOf("Arrow") === 0 || event.key === INTERACT_KEY_P2) event.preventDefault();
+      const name = keyName(event);
+      const alreadyDown = keys[name] === true;
+      keys[name] = true;
+      // Key repeat would open and close the panel over and over.
+      if (alreadyDown) return;
+      if (name === INTERACT_KEY_P1) tryInteract(player1, getRooms().left);
+      if (name === INTERACT_KEY_P2) tryInteract(player2, getRooms().right);
     });
 
     window.addEventListener("keyup", function (event) {
@@ -139,28 +178,24 @@
 
     function update(dt) {
       const rooms = getRooms();
-      moveHand(player1, direction("w", "s", "a", "d"), dt, rooms.left);
-      moveHand(player2, direction("ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"), dt, rooms.right);
+      // An open zoom panel freezes that hand. The other player keeps moving.
+      if (!player1.panelOpen) moveHand(player1, direction("w", "s", "a", "d"), dt, rooms.left);
+      if (!player2.panelOpen) moveHand(player2, direction("ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"), dt, rooms.right);
     }
 
     function drawHand(hand, color) {
       ctx.fillStyle = color;
 
-      // Three fingers along the top. They stay inside HAND_RADIUS.
-      const fingerSpots = [
-        { x: -12, y: -16 },
-        { x: 0, y: -18 },
-        { x: 12, y: -16 }
-      ];
-      for (let i = 0; i < fingerSpots.length; i++) {
+      // Fingers use FINGER_SPOTS, the same offsets the hitbox is built from.
+      for (let i = 0; i < FINGER_SPOTS.length; i++) {
         ctx.beginPath();
-        ctx.arc(hand.x + fingerSpots[i].x, hand.y + fingerSpots[i].y, 7, 0, Math.PI * 2);
+        ctx.arc(hand.x + FINGER_SPOTS[i].x, hand.y + FINGER_SPOTS[i].y, FINGER_RADIUS, 0, Math.PI * 2);
         ctx.fill();
       }
 
-      // Palm. The hitbox is this circle, so the hand can reach the wall.
+      // Palm
       ctx.beginPath();
-      ctx.arc(hand.x, hand.y, HAND_HITBOX_RADIUS, 0, Math.PI * 2);
+      ctx.arc(hand.x, hand.y, PALM_RADIUS, 0, Math.PI * 2);
       ctx.fill();
     }
 
@@ -194,6 +229,10 @@
       // Drawn last so the hand appears on top of the stations.
       drawHand(player1, COLOR_P1);
       drawHand(player2, COLOR_P2);
+
+      // Zoom panels sit above the room, one per player.
+      drawZoomPanel(rooms.left, player1);
+      drawZoomPanel(rooms.right, player2);
     }
 
     let lastTime = 0;
@@ -232,25 +271,27 @@
       };
     }
 
-    function clampNumber(value, min, max) {
-      if (value < min) return min;
-      if (value > max) return max;
-      return value;
+    // The box around the whole drawn hand, measured from its center.
+    function handBox(hand) {
+      return {
+        left: hand.x - HAND_HALF_WIDTH,
+        right: hand.x + HAND_HALF_WIDTH,
+        top: hand.y - HAND_TOP_EXTENT,
+        bottom: hand.y + HAND_BOTTOM_EXTENT
+      };
     }
 
-    // Nearest point on the monitor's outer rectangle to a point.
-    function closestPointOnRect(px, py, rect) {
-      return {
-        x: clampNumber(px, rect.x, rect.x + rect.width),
-        y: clampNumber(py, rect.y, rect.y + rect.height)
-      };
+    // Gap between the hand's box and the monitor. 0 means they touch or overlap.
+    function gapBetweenHandAndMonitor(hand, rect) {
+      const box = handBox(hand);
+      const gapX = Math.max(box.left - (rect.x + rect.width), rect.x - box.right, 0);
+      const gapY = Math.max(box.top - (rect.y + rect.height), rect.y - box.bottom, 0);
+      return Math.hypot(gapX, gapY);
     }
 
     // True when this room's hand is near or over its own monitor.
     function handIsNearMonitor(hand, rect) {
-      const closest = closestPointOnRect(hand.x, hand.y, rect);
-      const dist = Math.hypot(hand.x - closest.x, hand.y - closest.y);
-      return dist <= HAND_HITBOX_RADIUS + MONITOR_GLOW_DISTANCE;
+      return gapBetweenHandAndMonitor(hand, rect) <= MONITOR_GLOW_DISTANCE;
     }
 
     function drawMonitor(room, player) {
@@ -274,26 +315,145 @@
       ctx.fillStyle = COLOR_MONITOR_SCREEN;
       ctx.fillRect(screenX, screenY, screenW, screenH);
 
-      // Latest lines only, and long lines stay inside the black screen.
+      drawMessageList(player, screenX, screenY, screenW, screenH, 16, MONITOR_LINE_HEIGHT);
+
+      // Hint sits under the small monitor, and only while this hand is close.
+      if (near) {
+        ctx.fillStyle = COLOR_LABEL;
+        ctx.font = "14px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.fillText(player.hint, rect.x + rect.width / 2, rect.y + rect.height + 8);
+      }
+    }
+
+    function messageText(entry) {
+      // A countdown line is an object so we can change its text without adding a new row.
+      if (typeof entry === "string") return entry;
+      return entry.text;
+    }
+
+    function drawMessageList(player, screenX, screenY, screenW, screenH, fontSize, lineHeight) {
       ctx.save();
       ctx.beginPath();
       ctx.rect(screenX, screenY, screenW, screenH);
       ctx.clip();
       ctx.fillStyle = COLOR_MONITOR_TEXT;
-      ctx.font = "16px monospace";
+      ctx.font = fontSize + "px monospace";
       ctx.textAlign = "left";
       ctx.textBaseline = "top";
-      const maxLines = Math.max(1, Math.floor((screenH - 8) / MONITOR_LINE_HEIGHT));
+      const maxLines = Math.max(1, Math.floor((screenH - 8) / lineHeight));
       const start = Math.max(0, player.messages.length - maxLines);
       for (let i = start; i < player.messages.length; i++) {
         const line = i - start;
-        const entry = player.messages[i];
-        // A countdown line is an object so we can change its text without adding a new row.
-        const text = typeof entry === "string" ? entry : entry.text;
-        ctx.fillText(text, screenX + 8, screenY + 6 + line * MONITOR_LINE_HEIGHT);
+        ctx.fillText(messageText(player.messages[i]), screenX + 8, screenY + 6 + line * lineHeight);
       }
       ctx.restore();
     }
+
+    function getZoomRect(room) {
+      const roomWidth = room.right - room.left;
+      const width = roomWidth * ZOOM_WIDTH_RATIO;
+      const height = canvas.height * ZOOM_HEIGHT_RATIO;
+      return {
+        x: room.left + (roomWidth - width) / 2,
+        y: (canvas.height - height) / 2,
+        width: width,
+        height: height
+      };
+    }
+
+    function closeButtonRect(panel) {
+      return {
+        x: panel.x + panel.width - CLOSE_BUTTON_SIZE - 8,
+        y: panel.y + 8,
+        width: CLOSE_BUTTON_SIZE,
+        height: CLOSE_BUTTON_SIZE
+      };
+    }
+
+    function pointInRect(x, y, rect) {
+      return x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height;
+    }
+
+    // Open with the interact key while close to the monitor. Press it again to close.
+    function tryInteract(player, room) {
+      if (player.panelOpen) {
+        player.panelOpen = false;
+        return;
+      }
+      if (handIsNearMonitor(player, getMonitorRect(room))) {
+        player.panelOpen = true;
+      }
+    }
+
+    function drawZoomPanel(room, player) {
+      if (!player.panelOpen) return;
+
+      ctx.fillStyle = COLOR_ROOM_DIM;
+      ctx.fillRect(room.left, 0, room.right - room.left, canvas.height);
+
+      const panel = getZoomRect(room);
+      const bezel = Math.min(MONITOR_BEZEL, panel.width / 6, panel.height / 6);
+      ctx.fillStyle = COLOR_MONITOR_FRAME;
+      ctx.fillRect(panel.x, panel.y, panel.width, panel.height);
+
+      const screenX = panel.x + bezel;
+      const screenY = panel.y + bezel + 8;
+      const screenW = panel.width - bezel * 2;
+      const screenH = panel.height - bezel * 2 - 8;
+      ctx.fillStyle = COLOR_MONITOR_SCREEN;
+      ctx.fillRect(screenX, screenY, screenW, screenH);
+      drawMessageList(player, screenX, screenY, screenW, screenH, ZOOM_FONT_SIZE, ZOOM_LINE_HEIGHT);
+
+      const button = closeButtonRect(panel);
+      ctx.fillStyle = "#222228";
+      ctx.fillRect(button.x, button.y, button.width, button.height);
+      ctx.strokeStyle = COLOR_LABEL;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(button.x + 7, button.y + 7);
+      ctx.lineTo(button.x + button.width - 7, button.y + button.height - 7);
+      ctx.moveTo(button.x + button.width - 7, button.y + 7);
+      ctx.lineTo(button.x + 7, button.y + button.height - 7);
+      ctx.stroke();
+    }
+
+    // CSS can scale the canvas, so a click is converted into canvas pixels.
+    function canvasPointFromClick(event) {
+      const bounds = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / bounds.width;
+      const scaleY = canvas.height / bounds.height;
+      return {
+        x: (event.clientX - bounds.left) * scaleX,
+        y: (event.clientY - bounds.top) * scaleY
+      };
+    }
+
+    function handleClick(x, y) {
+      const rooms = getRooms();
+      let player = null;
+      let room = null;
+      if (x >= rooms.left.left && x < rooms.left.right) {
+        player = player1;
+        room = rooms.left;
+      } else if (x >= rooms.right.left && x < rooms.right.right) {
+        player = player2;
+        room = rooms.right;
+      }
+      // A click in the other half, or on the wall, leaves this panel alone.
+      if (!player || !player.panelOpen) return;
+
+      const panel = getZoomRect(room);
+      const onClose = pointInRect(x, y, closeButtonRect(panel));
+      const insidePanel = pointInRect(x, y, panel);
+      if (onClose || !insidePanel) player.panelOpen = false;
+    }
+
+    canvas.addEventListener("click", function (event) {
+      const point = canvasPointFromClick(event);
+      handleClick(point.x, point.y);
+    });
 
     addStatusMessage(player1, "> All systems ready.");
     addStatusMessage(player2, "> All systems ready.");
