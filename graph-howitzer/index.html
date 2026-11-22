@@ -22,16 +22,19 @@
     // Drawn hand. The hitbox is a square around the palm. Fingers may stick out.
     const PALM_RADIUS = 13;
     const HAND_HITBOX_HALF = PALM_RADIUS;
-    // Finger size and spots are fractions of the palm, from the old 18px hand.
-    const FINGER_RADIUS = PALM_RADIUS * (7 / 18);
+    // Four fingers across the top and a thicker thumb on the side. Offsets are fractions of the palm.
+    const FINGER_RADIUS = PALM_RADIUS * 0.36;
+    const THUMB_RADIUS = PALM_RADIUS * 0.44;
     const FINGER_SPOTS = [
-      { x: PALM_RADIUS * (-12 / 18), y: PALM_RADIUS * (-16 / 18) },
-      { x: 0, y: -PALM_RADIUS },
-      { x: PALM_RADIUS * (12 / 18), y: PALM_RADIUS * (-16 / 18) }
+      { x: PALM_RADIUS * -0.78, y: PALM_RADIUS * -0.95, r: FINGER_RADIUS },
+      { x: PALM_RADIUS * -0.28, y: PALM_RADIUS * -1.12, r: FINGER_RADIUS },
+      { x: PALM_RADIUS * 0.28, y: PALM_RADIUS * -1.12, r: FINGER_RADIUS },
+      { x: PALM_RADIUS * 0.78, y: PALM_RADIUS * -0.95, r: FINGER_RADIUS },
+      { x: PALM_RADIUS * -1.05, y: PALM_RADIUS * 0.22, r: THUMB_RADIUS }
     ];
-    // While a station panel is open, the fingers tuck in like a fist.
-    const HOLD_FINGER_RADIUS_RATIO = 0.65;
-    const HOLD_FINGER_PULL = 0.45;
+    // Holding pose: fingers curl in and shrink, but still peek past the palm edge.
+    const HOLD_FINGER_RADIUS_RATIO = 0.7;
+    const HOLD_FINGER_PULL = 0.8;
     const INTERACT_KEY_P1 = "e";
     const INTERACT_KEY_P2 = "Enter";
     // Shift+B opens the hidden battlefield viewer. Nothing in the room mentions it.
@@ -53,13 +56,10 @@
     const COLOR_P1 = "#3d8bfd";
     const COLOR_P2 = "#ff8a3d";
     const COLOR_LABEL = "#f2f2f7";
-    // Monitor sits on the left of its room. Narrower so the radar square fits beside it.
-    const MONITOR_WIDTH_RATIO = 0.55;
+    // Radar stays a square. Three equal gaps: before the monitor, between the stations, and after the radar.
     const MONITOR_HEIGHT_RATIO = 0.16;
     const MONITOR_TOP = 56; // sits below the player name
-    const MONITOR_MARGIN = 16; // base inset from each side of the room
-    const STATION_EXTRA_MARGIN_RATIO = 0.04; // shift both stations right by 4% of the room
-    const STATION_GAP = MONITOR_MARGIN * 2; // space between the monitor and the radar
+    const STATION_GAP_RATIO = 0.04; // each of those three gaps, as a fraction of the room width
     const MONITOR_BEZEL = 12;
     const MONITOR_GLOW_DISTANCE = 40; // how close a hand must be to light the frame
     const MONITOR_LINE_HEIGHT = 20;
@@ -67,6 +67,18 @@
     const COLOR_MONITOR_GLOW = "#f2f2f8";
     const COLOR_MONITOR_SCREEN = "#000000";
     const COLOR_MONITOR_TEXT = "#39ff6a";
+    const COLOR_MONITOR_WARNING = "#ff4040";
+    // Allowed status names. Only Idle is used right now.
+    const STATUS_NAMES = ["Idle", "Moving", "Redirecting", "Attacking", "Damaged"];
+    const STATUS_COLORS = {
+      Idle: "#39ff6a",
+      Moving: "#3ee0ff",
+      Redirecting: "#ffe14a",
+      Attacking: "#ff8a3d",
+      Damaged: "#ff4040"
+    };
+    const PING_WARNING_ENEMY = "> WARNING: Enemy signal detected!";
+    const PING_WARNING_OBSTACLE = "> WARNING: Movement near obstacle detected!";
     // Battlefield units. The square shows everything within 20 units around this player.
     // The square's half-size maps to 20 units.
     const RADAR_RANGE = 20;
@@ -85,11 +97,14 @@
     const BUILDING_MAX_SIZE = 14;
     const TOWER_MIN_RADIUS = 2;
     const TOWER_MAX_RADIUS = 5;
+    const BIG_OBSTACLE_SIZE = PLAYER_SIZE * 3; // building side, or tower diameter
+    const BIG_OBSTACLE_MIN = 1;
+    const BIG_OBSTACLE_MAX = 3;
     const OBSTACLE_CLEARANCE = 8; // empty units around each player's center
     const OBSTACLE_PLACE_TRIES = 8;
     // How close an opponent must be to an obstacle edge to light the red ping.
     const OBSTACLE_NEAR_DISTANCE = 3;
-    const RED_PING_SIZE = 16; // small square in the radar frame's bottom-right corner
+    const RED_PING_SIZE = 12; // capped at the bezel thickness so it sits in the frame corner
     const RED_PING_BLINK_SECONDS = 0.4;
     const COLOR_RED_PING_OFF = "#3a1518";
     const COLOR_RED_PING_ON = "#ff2a2a";
@@ -101,8 +116,8 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "" };
-    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "" };
+    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", status: "Idle" };
+    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", status: "Idle" };
 
     // The wall sits in the middle. Each player owns one side of it.
     function getRooms() {
@@ -214,19 +229,15 @@
     function drawHand(hand, color) {
       ctx.fillStyle = color;
       const holding = hand.panelOpen;
-      const fingerRadius = holding ? FINGER_RADIUS * HOLD_FINGER_RADIUS_RATIO : FINGER_RADIUS;
       const pull = holding ? HOLD_FINGER_PULL : 1;
+      const sizeRatio = holding ? HOLD_FINGER_RADIUS_RATIO : 1;
 
       // Fingers are only drawn. They are not part of the hitbox.
+      // The palm is drawn after them, so a held finger peeks past the edge.
       for (let i = 0; i < FINGER_SPOTS.length; i++) {
+        const spot = FINGER_SPOTS[i];
         ctx.beginPath();
-        ctx.arc(
-          hand.x + FINGER_SPOTS[i].x * pull,
-          hand.y + FINGER_SPOTS[i].y * pull,
-          fingerRadius,
-          0,
-          Math.PI * 2
-        );
+        ctx.arc(hand.x + spot.x * pull, hand.y + spot.y * pull, spot.r * sizeRatio, 0, Math.PI * 2);
         ctx.fill();
       }
 
@@ -286,16 +297,33 @@
 
       update(dt);
       updateCountdown(time);
+      updatePingWarnings();
       draw();
       requestAnimationFrame(frame);
     }
 
     // Add a line to one player's status monitor. Later code can call this too.
+    // text can be a string, or { text, color } when the line is not green.
     function addStatusMessage(player, text) {
       player.messages.push(text);
     }
 
-    // Monitor on the left, radar square on its right. Same top, under the player label.
+    // Set the pinned status. Unknown names are ignored.
+    function setStatus(player, status) {
+      for (let i = 0; i < STATUS_NAMES.length; i++) {
+        if (STATUS_NAMES[i] === status) {
+          player.status = status;
+          return;
+        }
+      }
+    }
+
+    function statusColor(status) {
+      if (STATUS_COLORS[status]) return STATUS_COLORS[status];
+      return STATUS_COLORS.Idle;
+    }
+
+    // Three equal gaps. The monitor width is whatever is left after the square radar.
     function getStationLayout(room) {
       const roomWidth = room.right - room.left;
       let height = canvas.height * MONITOR_HEIGHT_RATIO;
@@ -304,20 +332,27 @@
       if (height < 48 && maxHeight >= 48) height = 48;
       if (height < 1) height = 1;
 
-      const leftMargin = MONITOR_MARGIN + roomWidth * STATION_EXTRA_MARGIN_RATIO;
-      let gap = STATION_GAP;
-      let monitorWidth = roomWidth * MONITOR_WIDTH_RATIO;
       let radarSize = height;
-      let maxRow = roomWidth - leftMargin - MONITOR_MARGIN;
-      if (maxRow < 2) maxRow = Math.max(2, roomWidth - 2);
-      if (monitorWidth + gap + radarSize > maxRow) {
-        gap = Math.min(gap, Math.max(1, maxRow * 0.12));
-        radarSize = Math.min(radarSize, Math.max(1, (maxRow - gap) * 0.45));
-        monitorWidth = Math.max(1, maxRow - gap - radarSize);
+      let gap = roomWidth * STATION_GAP_RATIO;
+      let monitorWidth = roomWidth - radarSize - gap * 3;
+
+      // A tiny room cannot fit a full-height square. Shrink the radar and keep the gaps equal.
+      const minMonitor = Math.max(36, roomWidth * 0.38);
+      if (monitorWidth < minMonitor) {
+        monitorWidth = Math.min(minMonitor, roomWidth * 0.5);
+        radarSize = Math.max(16, (roomWidth - monitorWidth) * 0.42);
+        gap = (roomWidth - monitorWidth - radarSize) / 3;
+        if (gap < 2) {
+          gap = 2;
+          const inner = Math.max(8, roomWidth - gap * 3);
+          radarSize = Math.max(12, inner * 0.34);
+          monitorWidth = inner - radarSize;
+          gap = (roomWidth - monitorWidth - radarSize) / 3;
+        }
       }
 
       const monitor = {
-        x: room.left + Math.min(leftMargin, roomWidth - maxRow),
+        x: room.left + gap,
         y: MONITOR_TOP,
         width: monitorWidth,
         height: height
@@ -411,12 +446,14 @@
       drawRedPing(rect, ownerIndex);
     }
 
-    // Small square in the bottom-right of the radar frame. It overlaps the bezel.
+    // Small square in the bottom-right bezel. Size follows the frame thickness.
     // Blinks red when the opponent is in radar range or near an obstacle.
     // Off until H.O.W.L.E.R starts.
     function drawRedPing(radarRect, ownerIndex) {
-      const x = radarRect.x + radarRect.width - RED_PING_SIZE;
-      const y = radarRect.y + radarRect.height - RED_PING_SIZE;
+      const bezel = Math.min(MONITOR_BEZEL, radarRect.width / 4, radarRect.height / 4);
+      const size = Math.min(RED_PING_SIZE, bezel);
+      const x = radarRect.x + radarRect.width - size;
+      const y = radarRect.y + radarRect.height - size;
 
       let lit = false;
       if (redPingActive(ownerIndex)) {
@@ -424,15 +461,36 @@
         lit = step % 2 === 0;
       }
       ctx.fillStyle = lit ? COLOR_RED_PING_ON : COLOR_RED_PING_OFF;
-      ctx.fillRect(x, y, RED_PING_SIZE, RED_PING_SIZE);
+      ctx.fillRect(x, y, size, size);
+    }
+
+    // "" when the ping is off. "enemy" or "obstacle" says why it is on.
+    function redPingReason(ownerIndex) {
+      if (!machineStarted) return "";
+      const you = battlefield.players[ownerIndex];
+      const enemy = battlefield.players[1 - ownerIndex];
+      if (Math.hypot(enemy.x - you.x, enemy.y - you.y) <= RADAR_RANGE) return "enemy";
+      if (collidesWithObstacle(enemy.x, enemy.y, OBSTACLE_NEAR_DISTANCE)) return "obstacle";
+      return "";
     }
 
     function redPingActive(ownerIndex) {
-      if (!machineStarted) return false;
-      const you = battlefield.players[ownerIndex];
-      const enemy = battlefield.players[1 - ownerIndex];
-      if (Math.hypot(enemy.x - you.x, enemy.y - you.y) <= RADAR_RANGE) return true;
-      return collidesWithObstacle(enemy.x, enemy.y, OBSTACLE_NEAR_DISTANCE);
+      return redPingReason(ownerIndex) !== "";
+    }
+
+    // One warning line when the ping turns on. Blinking does not add more lines.
+    const pingWasOn = [false, false];
+    function updatePingWarnings() {
+      for (let i = 0; i < pingWasOn.length; i++) {
+        const reason = redPingReason(i);
+        const on = reason !== "";
+        if (on && !pingWasOn[i]) {
+          const player = i === 0 ? player1 : player2;
+          const text = reason === "enemy" ? PING_WARNING_ENEMY : PING_WARNING_OBSTACLE;
+          addStatusMessage(player, { text: text, color: COLOR_MONITOR_WARNING });
+        }
+        pingWasOn[i] = on;
+      }
     }
 
     // How many turns the sweep has made since H.O.W.L.E.R started. 0 points along +x.
@@ -590,22 +648,47 @@
       return entry.text;
     }
 
+    function messageColor(entry) {
+      if (typeof entry === "string" || !entry.color) return COLOR_MONITOR_TEXT;
+      return entry.color;
+    }
+
     function drawMessageList(player, screenX, screenY, screenW, screenH, fontSize, lineHeight) {
+      // The pinned status keeps a strip at the bottom. Log lines stop above it.
+      const barH = machineStarted ? lineHeight + 8 : 0;
+      const logH = Math.max(8, screenH - barH);
+
       ctx.save();
       ctx.beginPath();
-      ctx.rect(screenX, screenY, screenW, screenH);
+      ctx.rect(screenX, screenY, screenW, logH);
       ctx.clip();
-      ctx.fillStyle = COLOR_MONITOR_TEXT;
       ctx.font = fontSize + "px monospace";
       ctx.textAlign = "left";
       ctx.textBaseline = "top";
-      const maxLines = Math.max(1, Math.floor((screenH - 8) / lineHeight));
+      const maxLines = Math.max(1, Math.floor((logH - 8) / lineHeight));
       const start = Math.max(0, player.messages.length - maxLines);
       for (let i = start; i < player.messages.length; i++) {
+        const entry = player.messages[i];
+        ctx.fillStyle = messageColor(entry);
         const line = i - start;
-        ctx.fillText(messageText(player.messages[i]), screenX + 8, screenY + 6 + line * lineHeight);
+        ctx.fillText(messageText(entry), screenX + 8, screenY + 6 + line * lineHeight);
       }
       ctx.restore();
+
+      if (!machineStarted) return;
+
+      const barY = screenY + screenH - barH;
+      ctx.strokeStyle = "rgba(242, 242, 247, 0.4)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(screenX + 6, barY + 1);
+      ctx.lineTo(screenX + screenW - 6, barY + 1);
+      ctx.stroke();
+      ctx.fillStyle = statusColor(player.status);
+      ctx.font = fontSize + "px monospace";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      ctx.fillText("Status: " + player.status, screenX + 8, barY + 6);
     }
 
     function getZoomRect(room) {
@@ -736,6 +819,8 @@
 
     addStatusMessage(player1, "> All systems ready.");
     addStatusMessage(player2, "> All systems ready.");
+    setStatus(player1, "Idle");
+    setStatus(player2, "Idle");
 
     // One shared countdown, but each monitor keeps its own line so we can edit it in place.
     function countdownText(secondsLeft) {
@@ -784,23 +869,38 @@
       return Math.hypot(obstacle.w / 2, obstacle.h / 2);
     }
 
-    function randomObstacle(index) {
+    function randomObstacle(index, big) {
       // Even numbers are buildings and odd numbers are towers, so the map has both.
+      // A big shape is about three player-diameters across.
       if (index % 2 === 0) {
         return {
           type: "building",
           x: 0,
           y: 0,
-          w: randomRange(BUILDING_MIN_SIZE, BUILDING_MAX_SIZE),
-          h: randomRange(BUILDING_MIN_SIZE, BUILDING_MAX_SIZE)
+          w: big ? BIG_OBSTACLE_SIZE : randomRange(BUILDING_MIN_SIZE, BUILDING_MAX_SIZE),
+          h: big ? BIG_OBSTACLE_SIZE : randomRange(BUILDING_MIN_SIZE, BUILDING_MAX_SIZE)
         };
       }
       return {
         type: "tower",
         x: 0,
         y: 0,
-        r: randomRange(TOWER_MIN_RADIUS, TOWER_MAX_RADIUS)
+        r: big ? BIG_OBSTACLE_SIZE / 2 : randomRange(TOWER_MIN_RADIUS, TOWER_MAX_RADIUS)
       };
+    }
+
+    function pickBigIndexes() {
+      const count = BIG_OBSTACLE_MIN + Math.floor(Math.random() * (BIG_OBSTACLE_MAX - BIG_OBSTACLE_MIN + 1));
+      const picked = [];
+      while (picked.length < count) {
+        const index = Math.floor(Math.random() * OBSTACLE_COUNT);
+        let already = false;
+        for (let i = 0; i < picked.length; i++) {
+          if (picked[i] === index) already = true;
+        }
+        if (!already) picked.push(index);
+      }
+      return picked;
     }
 
     function obstacleHitsPlayers(obstacle, players) {
@@ -822,11 +922,16 @@
     }
 
     function makeObstacles(players) {
+      const bigIndexes = pickBigIndexes();
       const obstacles = [];
       for (let n = 0; n < OBSTACLE_COUNT; n++) {
+        let isBig = false;
+        for (let i = 0; i < bigIndexes.length; i++) {
+          if (bigIndexes[i] === n) isBig = true;
+        }
         let fallback = null;
         for (let attempt = 0; attempt < OBSTACLE_PLACE_TRIES; attempt++) {
-          const obstacle = randomObstacle(n);
+          const obstacle = randomObstacle(n, isBig);
           const reach = obstacleReach(obstacle);
           obstacle.x = randomRange(-FIELD_X_MAX + reach, FIELD_X_MAX - reach);
           obstacle.y = randomRange(-FIELD_Y_MAX + reach, FIELD_Y_MAX - reach);

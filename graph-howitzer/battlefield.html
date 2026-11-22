@@ -113,12 +113,26 @@
       ctx.fillStyle = COLOR_BOARD;
       ctx.fillRect(view.left, view.top, view.boardW, view.boardH);
 
-      // Center axes.
+      drawObstacles(view);
+
+      const colors = [COLOR_P1, COLOR_P2];
+      const names = ["P1", "P2"];
+      const radius = (PLAYER_SIZE / 2) * view.scale;
+      for (let i = 0; i < battlefield.players.length; i++) {
+        const player = battlefield.players[i];
+        const spot = worldToScreen(player.x, player.y, view);
+        ctx.fillStyle = colors[i];
+        ctx.beginPath();
+        ctx.arc(spot.x, spot.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+        drawAxisLabel(names[i], spot.x + radius + 6, spot.y - radius - 2, "left", "bottom");
+      }
+
+      // Axes, ticks, and numbers are drawn last so obstacles and players never cover them.
       ctx.fillStyle = COLOR_AXIS;
       ctx.fillRect(view.left, view.originY - 1, view.boardW, 2);
       ctx.fillRect(view.originX - 1, view.top, 2, view.boardH);
 
-      // Old-board ticks. Skip any that fall outside a saved map from before this size.
       const xEdge = battlefield.width / 2;
       const yEdge = battlefield.height / 2;
       const xNumbers = [];
@@ -169,21 +183,6 @@
       // x name at the positive (right) end. y name at the positive (top) end.
       drawAxisLabel("x", view.left + view.boardW - 4, view.originY - 4, "right", "bottom");
       drawAxisLabel("y", view.originX + 6, view.top + 4, "left", "top");
-
-      drawObstacles(view);
-
-      const colors = [COLOR_P1, COLOR_P2];
-      const names = ["P1", "P2"];
-      const radius = (PLAYER_SIZE / 2) * view.scale;
-      for (let i = 0; i < battlefield.players.length; i++) {
-        const player = battlefield.players[i];
-        const spot = worldToScreen(player.x, player.y, view);
-        ctx.fillStyle = colors[i];
-        ctx.beginPath();
-        ctx.arc(spot.x, spot.y, radius, 0, Math.PI * 2);
-        ctx.fill();
-        drawAxisLabel(names[i], spot.x + radius + 6, spot.y - radius - 2, "left", "bottom");
-      }
     }
 
     function drawObstacles(view) {
