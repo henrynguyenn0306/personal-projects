@@ -486,6 +486,13 @@
       };
     }
 
+    // Hitbox for future shots: the circle itself, radius PLAYER_SIZE / 2.
+    function isPointInPlayer(player, x, y) {
+      const radius = PLAYER_SIZE / 2;
+      const distance = Math.hypot(x - player.x, y - player.y);
+      return distance <= radius;
+    }
+
     const battlefield = makeBattlefield();
     const battlefieldChannel = new BroadcastChannel(BATTLEFIELD_CHANNEL_NAME);
 
