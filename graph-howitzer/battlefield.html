@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Graph Howitzer - Battlefield (debug)</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #14141e; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <canvas id="board"></canvas>
+
+  <script>
+    // Same sizes as the game. x increases to the right. y increases up.
+    const PLAYER_SIZE = 10;
+    const STORAGE_KEY = "graphHowitzerBattlefield";
+    const CHANNEL_NAME = "graph-howitzer";
+    const COLOR_BOARD = "#3a3a4a";
+    const COLOR_AXIS = "#ff5555";
+    const COLOR_LABEL = "#ffffff";
+    const COLOR_P1 = "#3d8bfd";
+    const COLOR_P2 = "#ff8a3d";
+
+    const canvas = document.getElementById("board");
+    const ctx = canvas.getContext("2d");
+
+    // null until the game has published a battlefield.
+    let battlefield = null;
+
+    function loadSavedBattlefield() {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (!saved) return;
+        battlefield = JSON.parse(saved);
+      } catch (error) {
+        battlefield = null;
+      }
+    }
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      draw();
+    }
+
+    // Turn a game position into a pixel. Screen y grows downward, so we flip y.
+    function worldToScreen(x, y, view) {
+      return {
+        x: view.originX + x * view.scale,
+        y: view.originY - y * view.scale
+      };
+    }
+
+    function boardView() {
+      const margin = 56;
+      const scale = Math.min(
+        (canvas.width - margin * 2) / battlefield.width,
+        (canvas.height - margin * 2) / battlefield.height
+      );
+      const boardW = battlefield.width * scale;
+      const boardH = battlefield.height * scale;
+      const left = (canvas.width - boardW) / 2;
+      const top = (canvas.height - boardH) / 2;
+      return {
+        scale: scale,
+        left: left,
+        top: top,
+        boardW: boardW,
+        boardH: boardH,
+        originX: left + boardW / 2,
+        originY: top + boardH / 2
+      };
+    }
+
+    function drawAxisLabel(text, x, y, align, baseline) {
+      ctx.fillStyle = COLOR_LABEL;
+      ctx.font = "bold 16px sans-serif";
+      ctx.textAlign = align;
+      ctx.textBaseline = baseline;
+      ctx.fillText(text, x, y);
+    }
+
+    function drawTick(view, x, y, horizontal) {
+      const spot = worldToScreen(x, y, view);
+      ctx.fillStyle = COLOR_AXIS;
+      if (horizontal) ctx.fillRect(spot.x - 1, view.originY - 3, 2, 6);
+      else ctx.fillRect(view.originX - 3, spot.y - 1, 6, 2);
+    }
+
+    function draw() {
+      ctx.fillStyle = "#14141e";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      if (!battlefield || !battlefield.players) {
+        ctx.fillStyle = COLOR_LABEL;
+        ctx.font = "bold 24px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("Open the game first", canvas.width / 2, canvas.height / 2);
+        return;
+      }
+
+      const view = boardView();
+
+      ctx.fillStyle = COLOR_BOARD;
+      ctx.fillRect(view.left, view.top, view.boardW, view.boardH);
+
+      // Center axes.
+      ctx.fillStyle = COLOR_AXIS;
+      ctx.fillRect(view.left, view.originY - 1, view.boardW, 2);
+      ctx.fillRect(view.originX - 1, view.top, 2, view.boardH);
+
+      const xEdge = battlefield.width / 2;
+      const yEdge = battlefield.height / 2;
+      const xNumbers = [-xEdge, -xEdge / 2, xEdge / 2, xEdge];
+      const yNumbers = [yEdge, yEdge / 2, -yEdge / 2, -yEdge];
+
+      for (let i = 0; i < xNumbers.length; i++) {
+        const value = xNumbers[i];
+        drawTick(view, value, 0, true);
+        const spot = worldToScreen(value, 0, view);
+        let textX = spot.x;
+        let align = "center";
+        if (value === -xEdge) {
+          textX = view.left + 4;
+          align = "left";
+        }
+        if (value === xEdge) {
+          textX = view.left + view.boardW - 4;
+          align = "right";
+        }
+        drawAxisLabel(String(value), textX, view.originY + 4, align, "top");
+      }
+
+      for (let i = 0; i < yNumbers.length; i++) {
+        const value = yNumbers[i];
+        drawTick(view, 0, value, false);
+        const spot = worldToScreen(0, value, view);
+        let textY = spot.y;
+        let baseline = "middle";
+        if (value === yEdge) {
+          textY = view.top + 4;
+          baseline = "top";
+        }
+        if (value === -yEdge) {
+          textY = view.top + view.boardH - 4;
+          baseline = "bottom";
+        }
+        drawAxisLabel(String(value), view.originX - 4, textY, "right", baseline);
+      }
+
+      // 0 sits just below-left of the crossing so the lines do not cover it.
+      drawAxisLabel("0", view.originX - 4, view.originY + 4, "right", "top");
+      // x name at the positive (right) end. y name at the positive (top) end.
+      drawAxisLabel("x", view.left + view.boardW - 4, view.originY - 4, "right", "bottom");
+      drawAxisLabel("y", view.originX + 6, view.top + 4, "left", "top");
+
+      const colors = [COLOR_P1, COLOR_P2];
+      const names = ["P1", "P2"];
+      const radius = (PLAYER_SIZE / 2) * view.scale;
+      for (let i = 0; i < battlefield.players.length; i++) {
+        const player = battlefield.players[i];
+        const spot = worldToScreen(player.x, player.y, view);
+        ctx.fillStyle = colors[i];
+        ctx.beginPath();
+        ctx.arc(spot.x, spot.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+        drawAxisLabel(names[i], spot.x + radius + 6, spot.y - radius - 2, "left", "bottom");
+      }
+    }
+
+    const channel = new BroadcastChannel(CHANNEL_NAME);
+    channel.onmessage = function (event) {
+      if (!event.data || event.data.type !== "state") return;
+      battlefield = event.data.battlefield;
+      draw();
+    };
+
+    loadSavedBattlefield();
+    // Ask the game tab for a fresh copy, in case it is already open.
+    channel.postMessage({ type: "request-state" });
+
+    window.addEventListener("resize", resize);
+    resize();
+  </script>
+</body>
+</html>

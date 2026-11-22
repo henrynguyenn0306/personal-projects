@@ -29,6 +29,13 @@
     ];
     const INTERACT_KEY_P1 = "e";
     const INTERACT_KEY_P2 = "Enter";
+    // Shift+B opens the hidden battlefield viewer. Nothing in the room mentions it.
+    const SECRET_VIEW_KEY = "KeyB";
+    const BATTLEFIELD_WIDTH = 120; // x runs from -60 to 60
+    const BATTLEFIELD_HEIGHT = 100; // y runs from -50 to 50, and up is positive
+    const PLAYER_SIZE = 10; // each player is a 10 by 10 circle
+    const BATTLEFIELD_STORAGE_KEY = "graphHowitzerBattlefield";
+    const BATTLEFIELD_CHANNEL_NAME = "graph-howitzer";
     const ZOOM_WIDTH_RATIO = 0.85;
     const ZOOM_HEIGHT_RATIO = 0.7;
     const ZOOM_FONT_SIZE = 28;
@@ -123,6 +130,11 @@
     }
 
     window.addEventListener("keydown", function (event) {
+      // This is not a movement key. Leave before we record it as a held key.
+      if (event.shiftKey && event.code === SECRET_VIEW_KEY) {
+        if (!event.repeat) window.open("battlefield.html", "_blank");
+        return;
+      }
       // Arrow keys scroll the page. Enter would activate a focused control.
       if (event.key.indexOf("Arrow") === 0 || event.key === INTERACT_KEY_P2) event.preventDefault();
       const name = keyName(event);
@@ -461,6 +473,52 @@
         countdownLines[i].text = text;
       }
     }
+
+    // Hidden map. It is not drawn in the rooms. The viewer tab reads this object.
+    function randomBetween(min, max) {
+      return min + Math.random() * (max - min);
+    }
+
+    function makeBattlefield() {
+      const radius = PLAYER_SIZE / 2;
+      const halfW = BATTLEFIELD_WIDTH / 2;
+      const halfH = BATTLEFIELD_HEIGHT / 2;
+      return {
+        width: BATTLEFIELD_WIDTH,
+        height: BATTLEFIELD_HEIGHT,
+        players: [
+          {
+            // Left half, at least one radius from the edges and from x = 0.
+            x: randomBetween(-halfW + radius, -radius),
+            y: randomBetween(-halfH + radius, halfH - radius)
+          },
+          {
+            // Right half, same padding.
+            x: randomBetween(radius, halfW - radius),
+            y: randomBetween(-halfH + radius, halfH - radius)
+          }
+        ]
+      };
+    }
+
+    const battlefield = makeBattlefield();
+    const battlefieldChannel = new BroadcastChannel(BATTLEFIELD_CHANNEL_NAME);
+
+    // Save the map and tell any open viewer tab. Call this again if the map changes.
+    function publishBattlefield() {
+      try {
+        localStorage.setItem(BATTLEFIELD_STORAGE_KEY, JSON.stringify(battlefield));
+      } catch (error) {
+        // The room still works if the browser blocks storage.
+      }
+      battlefieldChannel.postMessage({ type: "state", battlefield: battlefield });
+    }
+
+    battlefieldChannel.onmessage = function (event) {
+      if (event.data && event.data.type === "request-state") publishBattlefield();
+    };
+
+    publishBattlefield();
 
     window.addEventListener("resize", resize);
     resize();
