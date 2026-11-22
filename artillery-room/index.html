@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Artillery Room</title>
+  <style>
+    /* Fill the window with no scrollbars, same idea as the grid game */
+    body { margin: 0; overflow: hidden; background: #14141e; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <canvas id="room"></canvas>
+
+  <script>
+    // Sizes and colors live here so they are easy to change later
+    const WALL_WIDTH = 20;
+    const HAND_RADIUS = 30;
+    const HAND_SPEED = 250; // pixels per second
+    const COLOR_ROOM_1 = "#1a2230";
+    const COLOR_ROOM_2 = "#2a1c24";
+    const COLOR_WALL = "#8d8d99";
+    const COLOR_P1 = "#3d8bfd";
+    const COLOR_P2 = "#ff8a3d";
+    const COLOR_LABEL = "#f2f2f7";
+
+    const canvas = document.getElementById("room");
+    const ctx = canvas.getContext("2d");
+
+    // Which keys are held down right now. Both players can hold keys at once.
+    const keys = {};
+
+    // Hands start at 0. The first resize places them in the middle of each room.
+    const player1 = { x: 0, y: 0, placed: false };
+    const player2 = { x: 0, y: 0, placed: false };
+
+    // The wall sits in the middle. Each player owns one side of it.
+    function getRooms() {
+      const wallX = (canvas.width - WALL_WIDTH) / 2;
+      return {
+        wallX: wallX,
+        left: { left: 0, right: wallX },
+        right: { left: wallX + WALL_WIDTH, right: canvas.width }
+      };
+    }
+
+    // Keep the whole circle inside one room, including the screen edges.
+    function clampHand(hand, room) {
+      let minX = room.left + HAND_RADIUS;
+      let maxX = room.right - HAND_RADIUS;
+      let minY = HAND_RADIUS;
+      let maxY = canvas.height - HAND_RADIUS;
+
+      // A tiny window can be smaller than the hand. Sit in the middle then.
+      if (minX > maxX) {
+        hand.x = (room.left + room.right) / 2;
+      } else {
+        if (hand.x < minX) hand.x = minX;
+        if (hand.x > maxX) hand.x = maxX;
+      }
+      if (minY > maxY) {
+        hand.y = canvas.height / 2;
+      } else {
+        if (hand.y < minY) hand.y = minY;
+        if (hand.y > maxY) hand.y = maxY;
+      }
+    }
+
+    function centerHand(hand, room) {
+      hand.x = (room.left + room.right) / 2;
+      hand.y = canvas.height / 2;
+      hand.placed = true;
+      clampHand(hand, room);
+    }
+
+    // Match the canvas to the browser window, then keep the hands inside.
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      const rooms = getRooms();
+      if (!player1.placed) {
+        centerHand(player1, rooms.left);
+        centerHand(player2, rooms.right);
+      } else {
+        clampHand(player1, rooms.left);
+        clampHand(player2, rooms.right);
+      }
+    }
+
+    // Letters ignore Shift. Arrow names stay as "ArrowUp" and so on.
+    function keyName(event) {
+      if (event.key.indexOf("Arrow") === 0) return event.key;
+      return event.key.toLowerCase();
+    }
+
+    window.addEventListener("keydown", function (event) {
+      // Arrow keys normally scroll the page. This game uses them to move.
+      if (event.key.indexOf("Arrow") === 0) event.preventDefault();
+      keys[keyName(event)] = true;
+    });
+
+    window.addEventListener("keyup", function (event) {
+      keys[keyName(event)] = false;
+    });
+
+    // Turn held keys into a direction. Diagonal moves stay at the same speed.
+    function direction(up, down, left, right) {
+      let dx = 0;
+      let dy = 0;
+      if (keys[left]) dx -= 1;
+      if (keys[right]) dx += 1;
+      if (keys[up]) dy -= 1;
+      if (keys[down]) dy += 1;
+      const length = Math.hypot(dx, dy);
+      if (length === 0) return { x: 0, y: 0 };
+      return { x: dx / length, y: dy / length };
+    }
+
+    function moveHand(hand, dir, dt, room) {
+      hand.x += dir.x * HAND_SPEED * dt;
+      hand.y += dir.y * HAND_SPEED * dt;
+      clampHand(hand, room);
+    }
+
+    function update(dt) {
+      const rooms = getRooms();
+      moveHand(player1, direction("w", "s", "a", "d"), dt, rooms.left);
+      moveHand(player2, direction("ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"), dt, rooms.right);
+    }
+
+    function drawHand(hand, color) {
+      ctx.fillStyle = color;
+
+      // Three fingers along the top. They stay inside HAND_RADIUS.
+      const fingerSpots = [
+        { x: -12, y: -16 },
+        { x: 0, y: -18 },
+        { x: 12, y: -16 }
+      ];
+      for (let i = 0; i < fingerSpots.length; i++) {
+        ctx.beginPath();
+        ctx.arc(hand.x + fingerSpots[i].x, hand.y + fingerSpots[i].y, 7, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Palm
+      ctx.beginPath();
+      ctx.arc(hand.x, hand.y, 18, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function drawLabel(text, room) {
+      ctx.fillStyle = COLOR_LABEL;
+      ctx.font = "bold 20px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      const middle = (room.left + room.right) / 2;
+      ctx.fillText(text, middle, 16);
+    }
+
+    function draw() {
+      const rooms = getRooms();
+
+      ctx.fillStyle = COLOR_ROOM_1;
+      ctx.fillRect(rooms.left.left, 0, rooms.left.right - rooms.left.left, canvas.height);
+
+      ctx.fillStyle = COLOR_ROOM_2;
+      ctx.fillRect(rooms.right.left, 0, rooms.right.right - rooms.right.left, canvas.height);
+
+      ctx.fillStyle = COLOR_WALL;
+      ctx.fillRect(rooms.wallX, 0, WALL_WIDTH, canvas.height);
+
+      drawLabel("Player 1 (WASD)", rooms.left);
+      drawLabel("Player 2 (Arrow keys)", rooms.right);
+
+      drawHand(player1, COLOR_P1);
+      drawHand(player2, COLOR_P2);
+    }
+
+    let lastTime = 0;
+    function frame(time) {
+      // time is in milliseconds. dt is seconds since the previous frame.
+      let dt = lastTime === 0 ? 0 : (time - lastTime) / 1000;
+      lastTime = time;
+      // After a tab switch the gap can be huge. Cap it so the hands don't jump.
+      if (dt > 0.05) dt = 0.05;
+
+      update(dt);
+      draw();
+      requestAnimationFrame(frame);
+    }
+
+    window.addEventListener("resize", resize);
+    resize();
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>
