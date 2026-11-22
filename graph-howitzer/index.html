@@ -33,7 +33,7 @@
     const SECRET_VIEW_KEY = "KeyB";
     const FIELD_X_MAX = 120; // x runs from -120 to 120
     const FIELD_Y_MAX = 100; // y runs from -100 to 100, and up is positive
-    const PLAYER_SIZE = 4; // diameter 4 units, so the radius is 2
+    const PLAYER_SIZE = 6; // diameter 6 units, so the radius is 3
     const BATTLEFIELD_STORAGE_KEY = "graphHowitzerBattlefield";
     const BATTLEFIELD_CHANNEL_NAME = "graph-howitzer";
     const ZOOM_WIDTH_RATIO = 0.85;
@@ -48,10 +48,11 @@
     const COLOR_P1 = "#3d8bfd";
     const COLOR_P2 = "#ff8a3d";
     const COLOR_LABEL = "#f2f2f7";
-    // Each monitor is most of its room's width and grows with the window height.
-    const MONITOR_WIDTH_RATIO = 0.6;
+    // Monitor sits on the left of its room. Narrower so the radar square fits beside it.
+    const MONITOR_WIDTH_RATIO = 0.55;
     const MONITOR_HEIGHT_RATIO = 0.16;
     const MONITOR_TOP = 56; // sits below the player name
+    const MONITOR_MARGIN = 16;
     const MONITOR_BEZEL = 12;
     const MONITOR_GLOW_DISTANCE = 40; // how close a hand must be to light the frame
     const MONITOR_LINE_HEIGHT = 20;
@@ -59,6 +60,13 @@
     const COLOR_MONITOR_GLOW = "#f2f2f8";
     const COLOR_MONITOR_SCREEN = "#000000";
     const COLOR_MONITOR_TEXT = "#39ff6a";
+    // Battlefield units. The square shows everything within 20 units around this player.
+    // The square's half-size maps to 20 units.
+    const RADAR_RANGE = 20;
+    const COLOR_RADAR_SCREEN = "#04140a";
+    const COLOR_RADAR_BORDER = "#39ff6a";
+    const COLOR_RADAR_CROSS = "rgba(57, 255, 106, 0.28)";
+    const COLOR_RADAR_YOU = "#d8ffe4";
 
     const canvas = document.getElementById("room");
     const ctx = canvas.getContext("2d");
@@ -219,6 +227,8 @@
 
       drawMonitor(rooms.left, player1);
       drawMonitor(rooms.right, player2);
+      drawRadar(rooms.left);
+      drawRadar(rooms.right);
 
       // Drawn last so the hand appears on top of the stations.
       drawHand(player1, COLOR_P1);
@@ -248,21 +258,47 @@
       player.messages.push(text);
     }
 
-    // The monitor rectangle for one room. It stays centered under that room's label.
-    function getMonitorRect(room) {
+    // Monitor on the left, radar square on its right. Same top, under the player label.
+    function getStationLayout(room) {
       const roomWidth = room.right - room.left;
-      const width = roomWidth * MONITOR_WIDTH_RATIO;
       let height = canvas.height * MONITOR_HEIGHT_RATIO;
       const maxHeight = canvas.height - MONITOR_TOP - 24;
       if (height > maxHeight) height = maxHeight;
       if (height < 48 && maxHeight >= 48) height = 48;
       if (height < 1) height = 1;
-      return {
-        x: room.left + (roomWidth - width) / 2,
+
+      let monitorWidth = roomWidth * MONITOR_WIDTH_RATIO;
+      let radarSize = height;
+      const gap = MONITOR_MARGIN;
+      const maxRow = roomWidth - MONITOR_MARGIN * 2;
+      if (monitorWidth + gap + radarSize > maxRow) {
+        radarSize = Math.min(radarSize, Math.max(1, maxRow * 0.4));
+        monitorWidth = Math.max(1, maxRow - gap - radarSize);
+      }
+
+      const monitor = {
+        x: room.left + MONITOR_MARGIN,
         y: MONITOR_TOP,
-        width: width,
+        width: monitorWidth,
         height: height
       };
+      return {
+        monitor: monitor,
+        radar: {
+          x: monitor.x + monitor.width + gap,
+          y: monitor.y,
+          width: radarSize,
+          height: radarSize
+        }
+      };
+    }
+
+    function getMonitorRect(room) {
+      return getStationLayout(room).monitor;
+    }
+
+    function getRadarRect(room) {
+      return getStationLayout(room).radar;
     }
 
     // Square around the palm. Fingers are outside this box on purpose.
@@ -293,12 +329,6 @@
       const near = handIsNearMonitor(player, rect);
       const bezel = Math.min(MONITOR_BEZEL, rect.width / 4, rect.height / 4);
 
-      ctx.fillStyle = COLOR_LABEL;
-      ctx.font = "12px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "bottom";
-      ctx.fillText("STATUS MONITOR", rect.x + rect.width / 2, rect.y - 6);
-
       ctx.fillStyle = near ? COLOR_MONITOR_GLOW : COLOR_MONITOR_FRAME;
       ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
 
@@ -310,6 +340,35 @@
       ctx.fillRect(screenX, screenY, screenW, screenH);
 
       drawMessageList(player, screenX, screenY, screenW, screenH, 16, MONITOR_LINE_HEIGHT);
+    }
+
+    // Radar sits beside the monitor. Half of the square is RADAR_RANGE units.
+    // The center dot is this player ("you"). Nothing else is drawn yet.
+    // The hand passes over it; only the middle wall blocks movement.
+    function drawRadar(room) {
+      const rect = getRadarRect(room);
+      ctx.fillStyle = COLOR_RADAR_SCREEN;
+      ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+
+      ctx.strokeStyle = COLOR_RADAR_BORDER;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 2);
+
+      const centerX = rect.x + rect.width / 2;
+      const centerY = rect.y + rect.height / 2;
+      ctx.strokeStyle = COLOR_RADAR_CROSS;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(rect.x, centerY);
+      ctx.lineTo(rect.x + rect.width, centerY);
+      ctx.moveTo(centerX, rect.y);
+      ctx.lineTo(centerX, rect.y + rect.height);
+      ctx.stroke();
+
+      ctx.fillStyle = COLOR_RADAR_YOU;
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, 3, 0, Math.PI * 2);
+      ctx.fill();
     }
 
     function messageText(entry) {
