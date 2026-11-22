@@ -23,6 +23,17 @@
     const COLOR_P1 = "#3d8bfd";
     const COLOR_P2 = "#ff8a3d";
     const COLOR_LABEL = "#f2f2f7";
+    // Each monitor is most of its room's width and grows with the window height.
+    const MONITOR_WIDTH_RATIO = 0.6;
+    const MONITOR_HEIGHT_RATIO = 0.16;
+    const MONITOR_TOP = 56; // sits below the player name
+    const MONITOR_BEZEL = 12;
+    const MONITOR_GLOW_DISTANCE = 40; // how close a hand must be to light the frame
+    const MONITOR_LINE_HEIGHT = 20;
+    const COLOR_MONITOR_FRAME = "#3a3a42";
+    const COLOR_MONITOR_GLOW = "#f2f2f8";
+    const COLOR_MONITOR_SCREEN = "#000000";
+    const COLOR_MONITOR_TEXT = "#39ff6a";
 
     const canvas = document.getElementById("room");
     const ctx = canvas.getContext("2d");
@@ -31,8 +42,8 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false };
-    const player2 = { x: 0, y: 0, placed: false };
+    const player1 = { x: 0, y: 0, placed: false, messages: [] };
+    const player2 = { x: 0, y: 0, placed: false, messages: [] };
 
     // The wall sits in the middle. Each player owns one side of it.
     function getRooms() {
@@ -71,6 +82,8 @@
       hand.y = canvas.height / 2;
       hand.placed = true;
       clampHand(hand, room);
+      pushHandOutOfMonitor(hand, getMonitorRect(room));
+      clampHand(hand, room);
     }
 
     // Match the canvas to the browser window, then keep the hands inside.
@@ -82,6 +95,10 @@
         centerHand(player1, rooms.left);
         centerHand(player2, rooms.right);
       } else {
+        clampHand(player1, rooms.left);
+        clampHand(player2, rooms.right);
+        pushHandOutOfMonitor(player1, getMonitorRect(rooms.left));
+        pushHandOutOfMonitor(player2, getMonitorRect(rooms.right));
         clampHand(player1, rooms.left);
         clampHand(player2, rooms.right);
       }
@@ -119,6 +136,9 @@
     function moveHand(hand, dir, dt, room) {
       hand.x += dir.x * HAND_SPEED * dt;
       hand.y += dir.y * HAND_SPEED * dt;
+      clampHand(hand, room);
+      // The monitor is solid, so a hand that hits it gets pushed back out.
+      pushHandOutOfMonitor(hand, getMonitorRect(room));
       clampHand(hand, room);
     }
 
@@ -173,6 +193,9 @@
       drawLabel("Player 1 (WASD)", rooms.left);
       drawLabel("Player 2 (Arrow keys)", rooms.right);
 
+      drawMonitor(rooms.left, player1);
+      drawMonitor(rooms.right, player2);
+
       drawHand(player1, COLOR_P1);
       drawHand(player2, COLOR_P2);
     }
@@ -189,6 +212,123 @@
       draw();
       requestAnimationFrame(frame);
     }
+
+    // Add a line to one player's status monitor. Later code can call this too.
+    function addStatusMessage(player, text) {
+      player.messages.push(text);
+    }
+
+    // The monitor rectangle for one room. It stays centered under that room's label.
+    function getMonitorRect(room) {
+      const roomWidth = room.right - room.left;
+      const width = roomWidth * MONITOR_WIDTH_RATIO;
+      let height = canvas.height * MONITOR_HEIGHT_RATIO;
+      const maxHeight = canvas.height - MONITOR_TOP - 24;
+      if (height > maxHeight) height = maxHeight;
+      if (height < 48 && maxHeight >= 48) height = 48;
+      if (height < 1) height = 1;
+      return {
+        x: room.left + (roomWidth - width) / 2,
+        y: MONITOR_TOP,
+        width: width,
+        height: height
+      };
+    }
+
+    function clampNumber(value, min, max) {
+      if (value < min) return min;
+      if (value > max) return max;
+      return value;
+    }
+
+    // Nearest point on the monitor's outer rectangle to a point.
+    function closestPointOnRect(px, py, rect) {
+      return {
+        x: clampNumber(px, rect.x, rect.x + rect.width),
+        y: clampNumber(py, rect.y, rect.y + rect.height)
+      };
+    }
+
+    // Circle vs rectangle. Slide the hand out along the shortest path.
+    function pushHandOutOfMonitor(hand, rect) {
+      const closest = closestPointOnRect(hand.x, hand.y, rect);
+      const dx = hand.x - closest.x;
+      const dy = hand.y - closest.y;
+      const dist = Math.hypot(dx, dy);
+
+      // The center is inside the rectangle, so "closest" is the center itself.
+      if (dist === 0) {
+        const toLeft = hand.x - rect.x;
+        const toRight = rect.x + rect.width - hand.x;
+        const toTop = hand.y - rect.y;
+        const toBottom = rect.y + rect.height - hand.y;
+        if (toLeft <= toRight && toLeft <= toTop && toLeft <= toBottom) {
+          hand.x = rect.x - HAND_RADIUS;
+        } else if (toRight <= toTop && toRight <= toBottom) {
+          hand.x = rect.x + rect.width + HAND_RADIUS;
+        } else if (toTop <= toBottom) {
+          hand.y = rect.y - HAND_RADIUS;
+        } else {
+          hand.y = rect.y + rect.height + HAND_RADIUS;
+        }
+        return;
+      }
+
+      if (dist < HAND_RADIUS) {
+        const scale = (HAND_RADIUS - dist) / dist;
+        hand.x += dx * scale;
+        hand.y += dy * scale;
+      }
+    }
+
+    // True when this room's hand is near the outside of its own monitor.
+    function handIsNearMonitor(hand, rect) {
+      const closest = closestPointOnRect(hand.x, hand.y, rect);
+      const dist = Math.hypot(hand.x - closest.x, hand.y - closest.y);
+      return dist <= HAND_RADIUS + MONITOR_GLOW_DISTANCE;
+    }
+
+    function drawMonitor(room, player) {
+      const rect = getMonitorRect(room);
+      const near = handIsNearMonitor(player, rect);
+      const bezel = Math.min(MONITOR_BEZEL, rect.width / 4, rect.height / 4);
+
+      ctx.fillStyle = COLOR_LABEL;
+      ctx.font = "12px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "bottom";
+      ctx.fillText("STATUS MONITOR", rect.x + rect.width / 2, rect.y - 6);
+
+      ctx.fillStyle = near ? COLOR_MONITOR_GLOW : COLOR_MONITOR_FRAME;
+      ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+
+      const screenX = rect.x + bezel;
+      const screenY = rect.y + bezel;
+      const screenW = rect.width - bezel * 2;
+      const screenH = rect.height - bezel * 2;
+      ctx.fillStyle = COLOR_MONITOR_SCREEN;
+      ctx.fillRect(screenX, screenY, screenW, screenH);
+
+      // Latest lines only, and long lines stay inside the black screen.
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(screenX, screenY, screenW, screenH);
+      ctx.clip();
+      ctx.fillStyle = COLOR_MONITOR_TEXT;
+      ctx.font = "16px monospace";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      const maxLines = Math.max(1, Math.floor((screenH - 8) / MONITOR_LINE_HEIGHT));
+      const start = Math.max(0, player.messages.length - maxLines);
+      for (let i = start; i < player.messages.length; i++) {
+        const line = i - start;
+        ctx.fillText(player.messages[i], screenX + 8, screenY + 6 + line * MONITOR_LINE_HEIGHT);
+      }
+      ctx.restore();
+    }
+
+    addStatusMessage(player1, "> All systems ready.");
+    addStatusMessage(player2, "> All systems ready.");
 
     window.addEventListener("resize", resize);
     resize();
