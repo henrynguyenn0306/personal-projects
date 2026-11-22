@@ -52,7 +52,9 @@
     const MONITOR_WIDTH_RATIO = 0.55;
     const MONITOR_HEIGHT_RATIO = 0.16;
     const MONITOR_TOP = 56; // sits below the player name
-    const MONITOR_MARGIN = 16;
+    const MONITOR_MARGIN = 16; // base inset from each side of the room
+    const STATION_EXTRA_MARGIN_RATIO = 0.04; // shift both stations right by 4% of the room
+    const STATION_GAP = MONITOR_MARGIN * 2; // space between the monitor and the radar
     const MONITOR_BEZEL = 12;
     const MONITOR_GLOW_DISTANCE = 40; // how close a hand must be to light the frame
     const MONITOR_LINE_HEIGHT = 20;
@@ -64,7 +66,6 @@
     // The square's half-size maps to 20 units.
     const RADAR_RANGE = 20;
     const COLOR_RADAR_SCREEN = "#04140a";
-    const COLOR_RADAR_BORDER = "#39ff6a";
     const COLOR_RADAR_CROSS = "rgba(57, 255, 106, 0.28)";
     const COLOR_RADAR_YOU = "#d8ffe4";
 
@@ -267,17 +268,20 @@
       if (height < 48 && maxHeight >= 48) height = 48;
       if (height < 1) height = 1;
 
+      const leftMargin = MONITOR_MARGIN + roomWidth * STATION_EXTRA_MARGIN_RATIO;
+      let gap = STATION_GAP;
       let monitorWidth = roomWidth * MONITOR_WIDTH_RATIO;
       let radarSize = height;
-      const gap = MONITOR_MARGIN;
-      const maxRow = roomWidth - MONITOR_MARGIN * 2;
+      let maxRow = roomWidth - leftMargin - MONITOR_MARGIN;
+      if (maxRow < 2) maxRow = Math.max(2, roomWidth - 2);
       if (monitorWidth + gap + radarSize > maxRow) {
-        radarSize = Math.min(radarSize, Math.max(1, maxRow * 0.4));
+        gap = Math.min(gap, Math.max(1, maxRow * 0.12));
+        radarSize = Math.min(radarSize, Math.max(1, (maxRow - gap) * 0.45));
         monitorWidth = Math.max(1, maxRow - gap - radarSize);
       }
 
       const monitor = {
-        x: room.left + MONITOR_MARGIN,
+        x: room.left + Math.min(leftMargin, roomWidth - maxRow),
         y: MONITOR_TOP,
         width: monitorWidth,
         height: height
@@ -343,26 +347,39 @@
     }
 
     // Radar sits beside the monitor. Half of the square is RADAR_RANGE units.
-    // The center dot is this player ("you"). Nothing else is drawn yet.
+    // The frame matches the monitor. The screen stays black until H.O.M.D starts.
+    // After that, the center dot is this player ("you").
     // The hand passes over it; only the middle wall blocks movement.
     function drawRadar(room) {
       const rect = getRadarRect(room);
-      ctx.fillStyle = COLOR_RADAR_SCREEN;
+      const bezel = Math.min(MONITOR_BEZEL, rect.width / 4, rect.height / 4);
+
+      ctx.fillStyle = COLOR_MONITOR_FRAME;
       ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
 
-      ctx.strokeStyle = COLOR_RADAR_BORDER;
-      ctx.lineWidth = 2;
-      ctx.strokeRect(rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 2);
+      const screenX = rect.x + bezel;
+      const screenY = rect.y + bezel;
+      const screenW = rect.width - bezel * 2;
+      const screenH = rect.height - bezel * 2;
 
-      const centerX = rect.x + rect.width / 2;
-      const centerY = rect.y + rect.height / 2;
+      if (!machineStarted) {
+        ctx.fillStyle = COLOR_MONITOR_SCREEN;
+        ctx.fillRect(screenX, screenY, screenW, screenH);
+        return;
+      }
+
+      ctx.fillStyle = COLOR_RADAR_SCREEN;
+      ctx.fillRect(screenX, screenY, screenW, screenH);
+
+      const centerX = screenX + screenW / 2;
+      const centerY = screenY + screenH / 2;
       ctx.strokeStyle = COLOR_RADAR_CROSS;
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(rect.x, centerY);
-      ctx.lineTo(rect.x + rect.width, centerY);
-      ctx.moveTo(centerX, rect.y);
-      ctx.lineTo(centerX, rect.y + rect.height);
+      ctx.moveTo(screenX, centerY);
+      ctx.lineTo(screenX + screenW, centerY);
+      ctx.moveTo(centerX, screenY);
+      ctx.lineTo(centerX, screenY + screenH);
       ctx.stroke();
 
       ctx.fillStyle = COLOR_RADAR_YOU;
@@ -517,6 +534,7 @@
 
     let countdownStartTime = -1;
     let countdownSecondsLeft = COUNTDOWN_SECONDS;
+    let machineStarted = false;
 
     // Uses the animation timestamp so the ticks stay one second apart.
     function updateCountdown(time) {
@@ -527,6 +545,7 @@
       if (secondsLeft < 0) secondsLeft = 0;
       if (secondsLeft === countdownSecondsLeft) return;
       countdownSecondsLeft = secondsLeft;
+      if (secondsLeft === 0) machineStarted = true;
       const text = countdownText(secondsLeft);
       for (let i = 0; i < countdownLines.length; i++) {
         countdownLines[i].text = text;
