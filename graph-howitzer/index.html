@@ -44,6 +44,13 @@
     // Holding pose: fingers curl in and shrink, but still peek past the palm edge.
     const HOLD_FINGER_RADIUS_RATIO = 0.7;
     const HOLD_FINGER_PULL = 0.8;
+    // Pointing pose, used only while that player's zoom window is open.
+    const POINT_GLIDE_SECONDS = 0.1; // fingertip eases onto the next keypad key
+    const POINT_PRESS_DOWN_SECONDS = 0.12;
+    const POINT_PRESS_UP_SECONDS = 0.12;
+    const POINT_PRESS_SCALE = 0.86; // the hand shrinks a little as the finger touches down
+    const POINT_PRESS_SHIFT = 5; // pixels the hand drops during the press
+    const POINT_INDEX_REACH = PALM_RADIUS * 1.68; // palm center to the index fingertip center
     const INTERACT_KEY_P1 = "e";
     const INTERACT_KEY_P2 = "Enter";
     // Shift+B opens the hidden battlefield viewer. Nothing in the room mentions it.
@@ -549,6 +556,9 @@
       if (player2.gripping) placeHandOnKnob(player2, rooms.right);
       if (player1.fireOpen) placeHandOnFire(player1, rooms.left);
       if (player2.fireOpen) placeHandOnFire(player2, rooms.right);
+      // The pointing fingertip is drawn later, on top of the zoom window.
+      updatePointingHand(player1, rooms.left);
+      updatePointingHand(player2, rooms.right);
       if (moved1 || moved2) battlefieldDirty = true;
       // The last small step must be saved even if the throttle window has not ended.
       if ((player1WasMoving && !moved1) || (player2WasMoving && !moved2)) flushBattlefield(frameTime, true);
@@ -575,6 +585,85 @@
       ctx.beginPath();
       ctx.arc(hand.x, hand.y, PALM_RADIUS, 0, Math.PI * 2);
       ctx.fill();
+    }
+
+    // 0 at rest, 1 at the bottom of the press, then back to 0.
+    function pointPressAmount(hand) {
+      if (typeof hand.pointPressFrom !== "number" || hand.pointPressFrom < 0) return 0;
+      const age = (frameTime - hand.pointPressFrom) / 1000;
+      const down = POINT_PRESS_DOWN_SECONDS;
+      const up = POINT_PRESS_UP_SECONDS;
+      if (age < 0 || age >= down + up) return 0;
+      const linear = age < down ? age / down : 1 - (age - down) / up;
+      return linear * linear * (3 - 2 * linear);
+    }
+
+    // Glide the fingertip onto the highlighted key, or onto the window's close button.
+    function updatePointingHand(player, room) {
+      if (!player.panelOpen) {
+        player.pointReady = false;
+        player.pointPressFrom = -1;
+        return;
+      }
+      const goal = pointingTipTarget(player, room);
+      const goalMoved = !player.pointReady
+        || Math.hypot(goal.x - player.pointGoalX, goal.y - player.pointGoalY) > 0.5;
+      if (goalMoved) {
+        player.pointFromX = player.pointReady ? player.pointX : goal.x;
+        player.pointFromY = player.pointReady ? player.pointY : goal.y;
+        player.pointGoalX = goal.x;
+        player.pointGoalY = goal.y;
+        player.pointGlideFrom = frameTime;
+        player.pointReady = true;
+      }
+      const elapsed = (frameTime - player.pointGlideFrom) / 1000;
+      let t = POINT_GLIDE_SECONDS <= 0 ? 1 : elapsed / POINT_GLIDE_SECONDS;
+      if (t < 0) t = 0;
+      if (t > 1) t = 1;
+      const s = t * t * (3 - 2 * t);
+      player.pointX = player.pointFromX + (player.pointGoalX - player.pointFromX) * s;
+      player.pointY = player.pointFromY + (player.pointGoalY - player.pointFromY) * s;
+    }
+
+    // Index finger straight up. The other fingers stay curled against the palm.
+    function drawPointingHand(hand, color) {
+      if (!hand.pointReady) return;
+      const press = pointPressAmount(hand);
+      const scale = 1 - (1 - POINT_PRESS_SCALE) * press;
+      const tipX = hand.pointX;
+      const tipY = hand.pointY + POINT_PRESS_SHIFT * press;
+      ctx.save();
+      ctx.translate(tipX, tipY + POINT_INDEX_REACH * scale);
+      ctx.scale(scale, scale);
+      ctx.fillStyle = color;
+      // Curled fingers and thumb, tucked so only the index finger reaches the target.
+      const curled = [
+        { x: PALM_RADIUS * 0.42, y: PALM_RADIUS * -0.15, r: FINGER_RADIUS * 0.7 },
+        { x: PALM_RADIUS * 0.62, y: PALM_RADIUS * 0.28, r: FINGER_RADIUS * 0.58 },
+        { x: PALM_RADIUS * 0.22, y: PALM_RADIUS * 0.42, r: FINGER_RADIUS * 0.52 },
+        { x: PALM_RADIUS * -0.92, y: PALM_RADIUS * 0.08, r: THUMB_RADIUS * 0.78 }
+      ];
+      for (let i = 0; i < curled.length; i++) {
+        const spot = curled[i];
+        ctx.beginPath();
+        ctx.arc(spot.x, spot.y, spot.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      const index = [
+        { x: 0, y: POINT_INDEX_REACH * -0.48, r: FINGER_RADIUS * 0.95 },
+        { x: 0, y: POINT_INDEX_REACH * -0.76, r: FINGER_RADIUS * 0.78 },
+        { x: 0, y: -POINT_INDEX_REACH, r: FINGER_RADIUS * 0.62 }
+      ];
+      for (let i = 0; i < index.length; i++) {
+        const spot = index[i];
+        ctx.beginPath();
+        ctx.arc(spot.x, spot.y, spot.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.beginPath();
+      ctx.arc(0, 0, PALM_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
     }
 
     function drawLabel(text, room) {
@@ -615,13 +704,16 @@
       drawFireStation(rooms.right, player2);
       drawStartButton();
 
-      // Drawn last so the hand appears on top of the stations.
-      drawHand(player1, COLOR_P1);
-      drawHand(player2, COLOR_P2);
+      // Room hands sit on the stations. An open window gets its hand afterwards, on top.
+      if (!player1.panelOpen) drawHand(player1, COLOR_P1);
+      if (!player2.panelOpen) drawHand(player2, COLOR_P2);
 
       // Zoom panels sit above the room, one per player.
       drawZoomPanel(rooms.left, player1);
       drawZoomPanel(rooms.right, player2);
+
+      if (player1.panelOpen) drawPointingHand(player1, COLOR_P1);
+      if (player2.panelOpen) drawPointingHand(player2, COLOR_P2);
     }
 
     let lastTime = 0;
@@ -1364,6 +1456,9 @@
     }
 
     function pressFireKey(player) {
+      // The touch plays out on screen. The key still takes effect immediately.
+      player.pointPressFrom = frameTime;
+      player.pointPressIndex = player.fireIndex;
       const key = FIRE_KEYS[player.fireIndex];
       if (key === "DONE") {
         player.fireOpen = false;
@@ -1837,6 +1932,21 @@
       if (near && machineStarted) drawInteractOutline(rect);
     }
 
+    // One keypad cell. The pointing fingertip uses this same center.
+    function fireKeyCell(rect, index) {
+      const cols = FIRE_KEY_COLS;
+      const rows = Math.ceil(FIRE_KEYS.length / cols);
+      const gridX = rect.x + 8;
+      const gridY = rect.y + 28;
+      const cellW = (rect.width - 16) / cols;
+      const cellH = (rect.height - 38) / rows;
+      const col = index % cols;
+      const row = Math.floor(index / cols);
+      const x = gridX + col * cellW;
+      const y = gridY + row * cellH;
+      return { x: x, y: y, w: cellW, h: cellH, cx: x + cellW / 2, cy: y + cellH / 2 };
+    }
+
     // The right half of the fire zoom window. Same keys as the old floor overlay.
     function drawFireKeys(rect, player) {
       ctx.save();
@@ -1848,43 +1958,51 @@
       ctx.textBaseline = "middle";
       ctx.fillText("KEYPAD", rect.x + 8, rect.y + 14);
 
-      const cols = FIRE_KEY_COLS;
-      const rows = Math.ceil(FIRE_KEYS.length / cols);
-      const gridX = rect.x + 8;
-      const gridY = rect.y + 28;
-      const gridW = rect.width - 16;
-      const gridH = rect.height - 38;
-      const cellW = gridW / cols;
-      const cellH = gridH / rows;
+      const pressAge = (typeof player.pointPressFrom === "number" && player.pointPressFrom >= 0)
+        ? (frameTime - player.pointPressFrom) / 1000
+        : -1;
+      const pressTotal = POINT_PRESS_DOWN_SECONDS + POINT_PRESS_UP_SECONDS;
       for (let i = 0; i < FIRE_KEYS.length; i++) {
-        const col = i % cols;
-        const row = Math.floor(i / cols);
-        const cx = gridX + col * cellW;
-        const cy = gridY + row * cellH;
+        const cell = fireKeyCell(rect, i);
         const selected = i === player.fireIndex;
         ctx.fillStyle = selected ? "#1c3a28" : "#101014";
-        ctx.fillRect(cx + 2, cy + 2, cellW - 4, cellH - 4);
+        ctx.fillRect(cell.x + 2, cell.y + 2, cell.w - 4, cell.h - 4);
         if (selected) {
           ctx.strokeStyle = COLOR_MONITOR_TEXT;
           ctx.lineWidth = 2;
-          ctx.strokeRect(cx + 2, cy + 2, cellW - 4, cellH - 4);
+          ctx.strokeRect(cell.x + 2, cell.y + 2, cell.w - 4, cell.h - 4);
+        }
+        // A short flash and ring on the key the finger just pressed.
+        if (i === player.pointPressIndex && pressAge >= 0 && pressAge < pressTotal) {
+          const t = pressAge / pressTotal;
+          ctx.fillStyle = "rgba(210, 255, 230, " + (0.4 * (1 - t)).toFixed(3) + ")";
+          ctx.fillRect(cell.x + 2, cell.y + 2, cell.w - 4, cell.h - 4);
+          ctx.strokeStyle = "rgba(230, 255, 240, " + (0.85 * (1 - t)).toFixed(3) + ")";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(cell.cx, cell.cy, 4 + t * Math.min(cell.w, cell.h) * 0.42, 0, Math.PI * 2);
+          ctx.stroke();
         }
         ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
         ctx.font = "bold 14px sans-serif";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillText(FIRE_KEYS[i], cx + cellW / 2, cy + cellH / 2);
+        ctx.fillText(FIRE_KEYS[i], cell.cx, cell.cy);
       }
       ctx.restore();
     }
 
     // Left side is the shell graph. Right side is the keypad. Same frame as the monitor zoom.
-    function drawFireZoom(player, screenX, screenY, screenW, screenH) {
+    function drawFireZoom(player, view) {
       syncEquation(player);
+      const screenX = view.screenX;
+      const screenY = view.screenY;
+      const screenW = view.screenW;
+      const screenH = view.screenH;
       const gap = 10;
       const leftW = Math.floor((screenW - gap) * 0.62);
-      const rightX = screenX + leftW + gap;
-      const rightW = screenW - leftW - gap;
+      const rightX = view.keypad.x;
+      const rightW = view.keypad.width;
       const eqH = 34;
       const infoH = 78;
       ctx.fillStyle = "#000000";
@@ -2507,14 +2625,50 @@
       player.panelKind = kind;
     }
 
+    // Screen area inside a zoom frame, plus the fire keypad on its right half.
+    function zoomContent(room) {
+      const panel = getZoomRect(room);
+      const bezel = Math.min(MONITOR_BEZEL, panel.width / 6, panel.height / 6);
+      const screenX = panel.x + bezel;
+      const screenY = panel.y + bezel + 8;
+      const screenW = panel.width - bezel * 2;
+      const screenH = panel.height - bezel * 2 - 8;
+      const gap = 10;
+      const leftW = Math.floor((screenW - gap) * 0.62);
+      return {
+        panel: panel,
+        screenX: screenX,
+        screenY: screenY,
+        screenW: screenW,
+        screenH: screenH,
+        keypad: {
+          x: screenX + leftW + gap,
+          y: screenY,
+          width: screenW - leftW - gap,
+          height: screenH
+        }
+      };
+    }
+
+    // Where the extended fingertip rests while this zoom window is open.
+    function pointingTipTarget(player, room) {
+      const view = zoomContent(room);
+      if (player.panelKind === "fire") {
+        const cell = fireKeyCell(view.keypad, player.fireIndex);
+        return { x: cell.cx, y: cell.cy };
+      }
+      const button = closeButtonRect(view.panel);
+      return { x: button.x + button.width / 2, y: button.y + button.height / 2 };
+    }
+
     function drawZoomPanel(room, player) {
       if (!machineStarted || !player.panelOpen) return;
 
       ctx.fillStyle = COLOR_ROOM_DIM;
       ctx.fillRect(room.left, 0, room.right - room.left, canvas.height);
 
-      const panel = getZoomRect(room);
-      const bezel = Math.min(MONITOR_BEZEL, panel.width / 6, panel.height / 6);
+      const view = zoomContent(room);
+      const panel = view.panel;
       // The close button owns the top-right corner, so that screw is left off.
       let frameLabel = "STATUS";
       if (player.panelKind === "radar") frameLabel = "RADAR";
@@ -2525,16 +2679,16 @@
         skipCorners: ["tr"]
       });
 
-      const screenX = panel.x + bezel;
-      const screenY = panel.y + bezel + 8;
-      const screenW = panel.width - bezel * 2;
-      const screenH = panel.height - bezel * 2 - 8;
+      const screenX = view.screenX;
+      const screenY = view.screenY;
+      const screenW = view.screenW;
+      const screenH = view.screenH;
       ctx.fillStyle = COLOR_MONITOR_SCREEN;
       ctx.fillRect(screenX, screenY, screenW, screenH);
       if (player.panelKind === "radar") {
         drawBigRadar(player, screenX, screenY, screenW, screenH);
       } else if (player.panelKind === "fire") {
-        drawFireZoom(player, screenX, screenY, screenW, screenH);
+        drawFireZoom(player, view);
       } else {
         drawMessageList(player, screenX, screenY, screenW, screenH, ZOOM_FONT_SIZE, ZOOM_LINE_HEIGHT);
       }
