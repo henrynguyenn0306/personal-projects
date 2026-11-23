@@ -161,6 +161,21 @@
     const COLOR_REFUEL_LED = "#ffb020";
     const LOW_FUEL_TEXT = "> Warning: Fuel low (<20%).";
     const OUT_OF_FUEL_TEXT = "> Alert: Fuel depleted. Propulsion offline.";
+    // Fire control is the equation station. No shell is launched from it yet.
+    const FIRE_STATION_WIDTH = 250;
+    const FIRE_STATION_HEIGHT = 230;
+    const FIRE_GRAPH_X_MAX = 100; // meters along the firing direction
+    const FIRE_SAMPLE_STEP = 0.5;
+    const FIRE_EQUATION_MAX = 48;
+    const FIRE_DEFAULT_EQUATION = "-0.05x^2 + 2x";
+    const FIRE_KEY_COLS = 5;
+    const FIRE_KEYS = [
+      "7", "8", "9", "+", "sin",
+      "4", "5", "6", "-", "cos",
+      "1", "2", "3", "*", "sqrt",
+      "0", ".", "x", "/", "^",
+      "(", ")", "⌫", "CLR", "DONE"
+    ];
     const STATE_PUBLISH_SECONDS = 0.1; // tell the viewer about 10 times a second
     // Gray and dark metal, like the rest of the console. Sizes below are fractions of the plate.
     const COLOR_JOYSTICK_PLATE = "#3a3a42";
@@ -186,8 +201,8 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle" };
-    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle" };
+    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, fireOpen: false, fireIndex: 0 };
+    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, fireOpen: false, fireIndex: 0 };
 
     // The wall sits in the middle. Each player owns one side of it.
     function getRooms() {
@@ -259,8 +274,10 @@
       const name = keyName(event);
       const alreadyDown = keys[name] === true;
       keys[name] = true;
-      // Key repeat would open and close the panel over and over.
+      // Key repeat would open and close the panel over and over, and would race the keypad cursor.
       if (alreadyDown) return;
+      nudgeFireCursor(player1, name, "a", "d", "w", "s");
+      nudgeFireCursor(player2, name, "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown");
       // Holding the start button uses the same keys, but it is not a station press.
       if (name === INTERACT_KEY_P1) tryInteract(player1, getRooms().left);
       if (name === INTERACT_KEY_P2) tryInteract(player2, getRooms().right);
@@ -504,25 +521,30 @@
       player1.panelKind = "";
       player1.gripping = false;
       player1.refueling = false;
+      player1.fireOpen = false;
       setRefuelLine(player1, false);
       player2.panelOpen = false;
       player2.panelKind = "";
       player2.gripping = false;
       player2.refueling = false;
+      player2.fireOpen = false;
       setRefuelLine(player2, false);
     }
 
     function update(dt) {
       releaseLockedStations();
       const rooms = getRooms();
-      // A zoom panel freezes that hand. A gripped joystick pins it to the knob instead.
-      if (!player1.panelOpen && !player1.gripping) moveHand(player1, direction("w", "s", "a", "d"), dt, rooms.left);
-      if (!player2.panelOpen && !player2.gripping) moveHand(player2, direction("ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"), dt, rooms.right);
+      // A zoom panel freezes that hand. A gripped joystick pins it to the knob.
+      // Fire control pins it to that station while the keypad is open.
+      if (!player1.panelOpen && !player1.gripping && !player1.fireOpen) moveHand(player1, direction("w", "s", "a", "d"), dt, rooms.left);
+      if (!player2.panelOpen && !player2.gripping && !player2.fireOpen) moveHand(player2, direction("ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"), dt, rooms.right);
 
       const moved1 = updateMachine(player1, 0, dt);
       const moved2 = updateMachine(player2, 1, dt);
       if (player1.gripping) placeHandOnKnob(player1, rooms.left);
       if (player2.gripping) placeHandOnKnob(player2, rooms.right);
+      if (player1.fireOpen) placeHandOnFire(player1, rooms.left);
+      if (player2.fireOpen) placeHandOnFire(player2, rooms.right);
       if (moved1 || moved2) battlefieldDirty = true;
       // The last small step must be saved even if the throttle window has not ended.
       if ((player1WasMoving && !moved1) || (player2WasMoving && !moved2)) flushBattlefield(frameTime, true);
@@ -585,6 +607,8 @@
       drawFuelGauge(rooms.right, player2);
       drawRefuelStation(rooms.left, player1);
       drawRefuelStation(rooms.right, player2);
+      drawFireStation(rooms.left, player1);
+      drawFireStation(rooms.right, player2);
       drawStartButton();
 
       // Drawn last so the hand appears on top of the stations.
@@ -594,6 +618,8 @@
       // Zoom panels sit above the room, one per player.
       drawZoomPanel(rooms.left, player1);
       drawZoomPanel(rooms.right, player2);
+      drawFireKeypad(rooms.left, player1);
+      drawFireKeypad(rooms.right, player2);
     }
 
     let lastTime = 0;
@@ -794,6 +820,29 @@
         width: column.width,
         height: column.height - button.height
       };
+    }
+
+    // Right side of the room, under the monitor row. The joystick and fuel column stay on the left.
+    function getFireRect(room) {
+      const roomWidth = room.right - room.left;
+      const gap = roomWidth * STATION_GAP_RATIO;
+      const layout = getStationLayout(room);
+      const rowBottom = Math.max(
+        layout.monitor.y + layout.monitor.height,
+        layout.radar.y + layout.radar.height
+      );
+      const fuel = fuelColumnRect(room);
+      const leftLimit = fuel.x + fuel.width + gap;
+      const rightLimit = room.right - gap;
+      const topLimit = rowBottom + gap;
+      const bottomLimit = canvas.height - gap;
+      let width = FIRE_STATION_WIDTH;
+      let height = FIRE_STATION_HEIGHT;
+      if (rightLimit - leftLimit < width) width = Math.max(80, rightLimit - leftLimit);
+      if (bottomLimit - topLimit < height) height = Math.max(80, bottomLimit - topLimit);
+      let x = rightLimit - width;
+      if (x < leftLimit) x = leftLimit;
+      return { x: x, y: topLimit, width: width, height: height };
     }
 
     // Square around the palm. Fingers are outside this box on purpose.
@@ -1278,6 +1327,474 @@
       ctx.fill();
       ctx.restore();
       if (near && machineStarted && usable) drawInteractOutline(rect);
+    }
+
+    // Move the keypad highlight by one key. The cursor stops at the edges of the grid.
+    function nudgeFireCursor(player, name, left, right, up, down) {
+      if (!player.fireOpen || !machineStarted) return;
+      let dx = 0;
+      let dy = 0;
+      if (name === left) dx = -1;
+      if (name === right) dx = 1;
+      if (name === up) dy = -1;
+      if (name === down) dy = 1;
+      if (dx === 0 && dy === 0) return;
+      const cols = FIRE_KEY_COLS;
+      const rows = Math.ceil(FIRE_KEYS.length / cols);
+      let col = player.fireIndex % cols;
+      let row = Math.floor(player.fireIndex / cols);
+      col += dx;
+      row += dy;
+      if (col < 0) col = 0;
+      if (col >= cols) col = cols - 1;
+      if (row < 0) row = 0;
+      if (row >= rows) row = rows - 1;
+      const next = row * cols + col;
+      if (next >= 0 && next < FIRE_KEYS.length) player.fireIndex = next;
+    }
+
+    // The hand grips the lower-left corner, outside the plate, so the label stays readable.
+    function placeHandOnFire(player, room) {
+      const rect = getFireRect(room);
+      player.x = rect.x - 6;
+      player.y = rect.y + rect.height - 8;
+      clampHand(player, room);
+    }
+
+    function pressFireKey(player) {
+      const key = FIRE_KEYS[player.fireIndex];
+      if (key === "DONE") {
+        player.fireOpen = false;
+        return;
+      }
+      if (key === "CLR") {
+        player.equation = "";
+        return;
+      }
+      if (key === "⌫") {
+        if (player.equation.length > 0) player.equation = player.equation.slice(0, -1);
+        return;
+      }
+      if (player.equation.length >= FIRE_EQUATION_MAX) return;
+      player.equation += key;
+    }
+
+    // Break the equation into numbers, names, and symbols. Null means the text is not readable.
+    function tokenizeEquation(input) {
+      const tokens = [];
+      let i = 0;
+      while (i < input.length) {
+        const c = input.charAt(i);
+        if (c === " " || c === "\t") {
+          i += 1;
+          continue;
+        }
+        if ("+-*/^()".indexOf(c) >= 0) {
+          tokens.push({ type: c });
+          i += 1;
+          continue;
+        }
+        if ((c >= "0" && c <= "9") || c === ".") {
+          const start = i;
+          let dots = 0;
+          while (i < input.length) {
+            const d = input.charAt(i);
+            if (d >= "0" && d <= "9") {
+              i += 1;
+              continue;
+            }
+            if (d === ".") {
+              dots += 1;
+              i += 1;
+              continue;
+            }
+            break;
+          }
+          const text = input.slice(start, i);
+          if (dots > 1 || text === ".") return null;
+          const value = Number(text);
+          if (!isFinite(value)) return null;
+          tokens.push({ type: "num", value: value });
+          continue;
+        }
+        if ((c >= "a" && c <= "z") || (c >= "A" && c <= "Z")) {
+          const start = i;
+          while (i < input.length) {
+            const d = input.charAt(i);
+            if ((d >= "a" && d <= "z") || (d >= "A" && d <= "Z")) i += 1;
+            else break;
+          }
+          const name = input.slice(start, i).toLowerCase();
+          if (name !== "x" && name !== "sin" && name !== "cos" && name !== "sqrt") return null;
+          tokens.push({ type: "name", value: name });
+          continue;
+        }
+        return null;
+      }
+      return tokens;
+    }
+
+    // Recursive descent. ^ is tighter than * /, and * / is tighter than + -.
+    // A minus in front of a value is a sign. 2x means 2 * x. No eval is used.
+    function parseExpression(input) {
+      const tokens = tokenizeEquation(input);
+      if (!tokens || tokens.length === 0) return null;
+      let pos = 0;
+
+      function peek() {
+        if (pos >= tokens.length) return null;
+        return tokens[pos];
+      }
+
+      function startsValue(token) {
+        if (!token) return false;
+        return token.type === "num" || token.type === "name" || token.type === "(";
+      }
+
+      function parseExpr() {
+        let left = parseTerm();
+        if (!left) return null;
+        while (peek() && (peek().type === "+" || peek().type === "-")) {
+          const op = peek().type;
+          pos += 1;
+          const right = parseTerm();
+          if (!right) return null;
+          left = { op: op, left: left, right: right };
+        }
+        return left;
+      }
+
+      function parseTerm() {
+        let left = parseUnary();
+        if (!left) return null;
+        while (peek()) {
+          const token = peek();
+          if (token.type === "*" || token.type === "/") {
+            pos += 1;
+            const right = parseUnary();
+            if (!right) return null;
+            left = { op: token.type, left: left, right: right };
+            continue;
+          }
+          // 2x, 2sin(x), and 2(x+1) are products even without a * sign.
+          if (startsValue(token)) {
+            const right = parseUnary();
+            if (!right) return null;
+            left = { op: "*", left: left, right: right };
+            continue;
+          }
+          break;
+        }
+        return left;
+      }
+
+      function parseUnary() {
+        if (peek() && peek().type === "+") {
+          pos += 1;
+          return parseUnary();
+        }
+        if (peek() && peek().type === "-") {
+          pos += 1;
+          const value = parseUnary();
+          if (!value) return null;
+          return { op: "neg", value: value };
+        }
+        return parsePower();
+      }
+
+      function parsePower() {
+        const base = parsePrimary();
+        if (!base) return null;
+        if (peek() && peek().type === "^") {
+          pos += 1;
+          const exp = parseUnary();
+          if (!exp) return null;
+          return { op: "^", left: base, right: exp };
+        }
+        return base;
+      }
+
+      function parsePrimary() {
+        const token = peek();
+        if (!token) return null;
+        if (token.type === "num") {
+          pos += 1;
+          return { op: "num", value: token.value };
+        }
+        if (token.type === "name" && token.value === "x") {
+          pos += 1;
+          return { op: "x" };
+        }
+        if (token.type === "name") {
+          pos += 1;
+          if (peek() && peek().type === "(") {
+            pos += 1;
+          } else {
+            return null;
+          }
+          const arg = parseExpr();
+          if (!arg || !peek() || peek().type !== ")") return null;
+          pos += 1;
+          return { op: token.value, value: arg };
+        }
+        if (token.type === "(") {
+          pos += 1;
+          const inner = parseExpr();
+          if (!inner || !peek() || peek().type !== ")") return null;
+          pos += 1;
+          return inner;
+        }
+        return null;
+      }
+
+      const tree = parseExpr();
+      if (!tree || pos !== tokens.length) return null;
+      return tree;
+    }
+
+    function evalExpr(node, x) {
+      if (!node) return NaN;
+      if (node.op === "num") return node.value;
+      if (node.op === "x") return x;
+      if (node.op === "neg") return -evalExpr(node.value, x);
+      if (node.op === "sin") return Math.sin(evalExpr(node.value, x));
+      if (node.op === "cos") return Math.cos(evalExpr(node.value, x));
+      if (node.op === "sqrt") return Math.sqrt(evalExpr(node.value, x));
+      const a = evalExpr(node.left, x);
+      const b = evalExpr(node.right, x);
+      if (node.op === "+") return a + b;
+      if (node.op === "-") return a - b;
+      if (node.op === "*") return a * b;
+      if (node.op === "/") return a / b;
+      if (node.op === "^") return Math.pow(a, b);
+      return NaN;
+    }
+
+    function syncEquation(player) {
+      if (player.equationParsedFor === player.equation) return;
+      player.equationParsedFor = player.equation;
+      player.equationTree = parseExpression(player.equation);
+    }
+
+    // Samples from x = 0 until the shell comes back to the ground, or the axis ends.
+    function shellPoints(tree) {
+      const points = [];
+      let leftGround = false;
+      const steps = Math.round(FIRE_GRAPH_X_MAX / FIRE_SAMPLE_STEP);
+      for (let i = 0; i <= steps; i++) {
+        const x = i * FIRE_SAMPLE_STEP;
+        const y = evalExpr(tree, x);
+        if (!isFinite(y)) break;
+        if (y > 0.02) leftGround = true;
+        points.push({ x: x, y: y });
+        if (leftGround && y <= 0) break;
+      }
+      return points;
+    }
+
+    function niceTickStep(span) {
+      if (!(span > 0)) return 1;
+      const raw = span / 4;
+      const pow = Math.pow(10, Math.floor(Math.log10(raw)));
+      const n = raw / pow;
+      let step = 10;
+      if (n < 1.5) step = 1;
+      else if (n < 3.5) step = 2;
+      else if (n < 7.5) step = 5;
+      return step * pow;
+    }
+
+    function drawShellGraph(screen, tree) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(screen.x, screen.y, screen.w, screen.h);
+      ctx.clip();
+      ctx.fillStyle = COLOR_RADAR_SCREEN;
+      ctx.fillRect(screen.x, screen.y, screen.w, screen.h);
+
+      const padL = 34;
+      const padB = 16;
+      const padT = 6;
+      const padR = 6;
+      const plotX = screen.x + padL;
+      const plotY = screen.y + padT;
+      const plotW = Math.max(8, screen.w - padL - padR);
+      const plotH = Math.max(8, screen.h - padT - padB);
+      const points = tree ? shellPoints(tree) : [];
+      let yMin = 0;
+      let yMax = 10;
+      for (let i = 0; i < points.length; i++) {
+        if (points[i].y < yMin) yMin = points[i].y;
+        if (points[i].y > yMax) yMax = points[i].y;
+      }
+      if (yMax - yMin < 1) yMax = yMin + 10;
+      const pad = (yMax - yMin) * 0.08;
+      yMin -= pad;
+      yMax += pad;
+      const ySpan = yMax - yMin;
+
+      function px(x) {
+        return plotX + (x / FIRE_GRAPH_X_MAX) * plotW;
+      }
+      function py(y) {
+        return plotY + (1 - (y - yMin) / ySpan) * plotH;
+      }
+
+      ctx.strokeStyle = COLOR_RADAR_CROSS;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(px(0), py(yMin));
+      ctx.lineTo(px(0), py(yMax));
+      const groundY = py(0);
+      ctx.moveTo(px(0), groundY);
+      ctx.lineTo(px(FIRE_GRAPH_X_MAX), groundY);
+      ctx.stroke();
+
+      ctx.fillStyle = COLOR_RADAR_YOU;
+      ctx.font = "10px monospace";
+      ctx.textBaseline = "top";
+      const xTicks = [0, 50, 100];
+      for (let i = 0; i < xTicks.length; i++) {
+        const tick = xTicks[i];
+        ctx.textAlign = tick === 0 ? "left" : (tick === 100 ? "right" : "center");
+        ctx.fillText(tick + " m", px(tick), groundY + 2);
+      }
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      const yStep = niceTickStep(yMax - yMin);
+      const first = Math.ceil(yMin / yStep) * yStep;
+      for (let y = first; y <= yMax + yStep * 0.01; y += yStep) {
+        if (Math.abs(y) < yStep * 0.01 && y !== 0) continue;
+        const label = Math.abs(y) < yStep * 0.01 ? 0 : Math.round(y * 1000) / 1000;
+        ctx.fillText(label + " m", plotX - 3, py(y));
+      }
+
+      if (points.length > 1) {
+        ctx.strokeStyle = COLOR_MONITOR_TEXT;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(px(points[0].x), py(points[0].y));
+        for (let i = 1; i < points.length; i++) {
+          ctx.lineTo(px(points[i].x), py(points[i].y));
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function drawFireStation(room, player) {
+      const rect = getFireRect(room);
+      const near = stationNearHand(player, room) === "fire";
+      syncEquation(player);
+      ctx.save();
+      drawBeveledRect(rect);
+      const boltR = Math.max(2, Math.min(3, rect.width * 0.045));
+      const inset = boltR + 4;
+      if (rect.width > inset * 2 + 8 && rect.height > inset * 2 + 8) {
+        drawBolt(rect.x + inset, rect.y + inset, boltR);
+        drawBolt(rect.x + rect.width - inset, rect.y + inset, boltR);
+        drawBolt(rect.x + inset, rect.y + rect.height - inset, boltR);
+        drawBolt(rect.x + rect.width - inset, rect.y + rect.height - inset, boltR);
+      }
+
+      const label = rect.width >= 160 ? "FIRE CONTROL" : "FIRE";
+      ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
+      ctx.font = "bold 11px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, rect.x + rect.width / 2 - 8, rect.y + rect.height - 16);
+      ctx.fillStyle = machineStarted ? COLOR_JOYSTICK_LED_ON : COLOR_JOYSTICK_LED_OFF;
+      ctx.beginPath();
+      ctx.arc(rect.x + rect.width - inset - 8, rect.y + rect.height - 16, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      const innerX = rect.x + 12;
+      const innerY = rect.y + 12;
+      const innerW = rect.width - 24;
+      const eqH = Math.max(36, Math.min(48, rect.height * 0.2));
+      ctx.fillStyle = "#000000";
+      ctx.fillRect(innerX, innerY, innerW, eqH);
+      ctx.beginPath();
+      ctx.rect(innerX, innerY, innerW, eqH);
+      ctx.clip();
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      if (player.equationTree) {
+        ctx.font = "13px monospace";
+        ctx.fillStyle = COLOR_MONITOR_TEXT;
+        ctx.fillText("y = " + player.equation, innerX + 6, innerY + eqH / 2);
+      } else {
+        ctx.font = "13px monospace";
+        ctx.fillStyle = COLOR_MONITOR_WARNING;
+        ctx.fillText("Syntax error", innerX + 6, innerY + eqH * 0.32);
+        ctx.font = "11px monospace";
+        ctx.fillStyle = "#6d8a74";
+        ctx.fillText("y = " + player.equation, innerX + 6, innerY + eqH * 0.72);
+      }
+      ctx.restore();
+
+      const graphY = innerY + eqH + 8;
+      const graphH = rect.y + rect.height - 30 - graphY;
+      if (graphH > 20 && innerW > 20) {
+        drawShellGraph(
+          { x: innerX, y: graphY, w: innerW, h: graphH },
+          player.equationTree
+        );
+      }
+      if (near && machineStarted) drawInteractOutline(rect);
+    }
+
+    // Keypad for the player whose hand is locked on fire control. Direction keys move the box.
+    function drawFireKeypad(room, player) {
+      if (!machineStarted || !player.fireOpen) return;
+      const fire = getFireRect(room);
+      const gap = (room.right - room.left) * STATION_GAP_RATIO;
+      let x = room.left + gap;
+      let y = fire.y + fire.height + gap;
+      let width = room.right - gap - x;
+      let height = canvas.height - gap - y;
+      if (height < 120) {
+        y = fire.y;
+        height = fire.height;
+        width = Math.max(80, fire.x - gap - x);
+      }
+      const rect = { x: x, y: y, width: width, height: height };
+      ctx.save();
+      drawBeveledRect(rect);
+      ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
+      ctx.font = "bold 11px sans-serif";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText("KEYPAD", rect.x + 12, rect.y + 16);
+
+      const cols = FIRE_KEY_COLS;
+      const rows = Math.ceil(FIRE_KEYS.length / cols);
+      const gridX = rect.x + 10;
+      const gridY = rect.y + 30;
+      const gridW = rect.width - 20;
+      const gridH = rect.height - 42;
+      const cellW = gridW / cols;
+      const cellH = gridH / rows;
+      for (let i = 0; i < FIRE_KEYS.length; i++) {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        const cx = gridX + col * cellW;
+        const cy = gridY + row * cellH;
+        const selected = i === player.fireIndex;
+        ctx.fillStyle = selected ? "#1c3a28" : COLOR_JOYSTICK_WELL;
+        ctx.fillRect(cx + 2, cy + 2, cellW - 4, cellH - 4);
+        if (selected) {
+          ctx.strokeStyle = COLOR_MONITOR_TEXT;
+          ctx.lineWidth = 2;
+          ctx.strokeRect(cx + 2, cy + 2, cellW - 4, cellH - 4);
+        }
+        ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
+        ctx.font = "bold 13px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(FIRE_KEYS[i], cx + cellW / 2, cy + cellH / 2);
+      }
+      ctx.restore();
     }
 
     // Soft pulse around the station the hand can use. The station itself does not brighten.
@@ -1777,7 +2294,8 @@
         { kind: "monitor", rect: getMonitorRect(room) },
         { kind: "radar", rect: getRadarRect(room) },
         { kind: "joystick", rect: getJoystickRect(room) },
-        { kind: "refuel", rect: getRefuelRect(room) }
+        { kind: "refuel", rect: getRefuelRect(room) },
+        { kind: "fire", rect: getFireRect(room) }
       ];
       let bestKind = "";
       let bestDist = 0;
@@ -1801,6 +2319,10 @@
       // Stations stay shut until H.O.W.L.E.R has finished starting.
       // The start button watches the held key itself, so this press is ignored.
       if (!machineStarted) return;
+      if (player.fireOpen) {
+        pressFireKey(player);
+        return;
+      }
       if (player.refueling) {
         player.refueling = false;
         setRefuelLine(player, false);
@@ -1829,6 +2351,12 @@
       if (kind === "refuel") {
         if (!refuelUsable(player)) return;
         player.refueling = true;
+        return;
+      }
+      if (kind === "fire") {
+        player.fireOpen = true;
+        player.fireIndex = 0;
+        placeHandOnFire(player, room);
         return;
       }
       player.panelOpen = true;
