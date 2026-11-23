@@ -149,7 +149,11 @@
     const REFUEL_SECONDS_FULL = 90; // seconds to go from empty to full
     const REFUEL_BLINK_SECONDS = 0.4;
     const FUEL_GAUGE_WIDTH = 58; // bar snapped to the joystick, toward the middle of the room
-    const REFUEL_BUTTON_HEIGHT = 64;
+    // Gauge and button share the joystick's height. The button is the bottom slice.
+    const REFUEL_HEIGHT_RATIO = 0.28;
+    const COLOR_REFUEL_DISABLED = "#7a7a84";
+    const COLLISION_HOLD_SECONDS = 1.5; // keep the line briefly so it does not flicker
+    const COLLISION_TEXT = "> There's a collision!";
     const COLOR_FUEL_HIGH = "#39ff6a";
     const COLOR_FUEL_MID = "#ffe14a";
     const COLOR_FUEL_LOW = "#ff4040";
@@ -344,14 +348,30 @@
       return { x: vx + dx * (step / dist), y: vy + dy * (step / dist) };
     }
 
+    // Two machines are squares of side PLAYER_SIZE. Overlap blocks; edges count as a touch.
+    function playerSquaresOverlap(x, y, other) {
+      return Math.abs(x - other.x) < PLAYER_SIZE && Math.abs(y - other.y) < PLAYER_SIZE;
+    }
+
+    function playersTouch(a, b) {
+      return Math.abs(a.x - b.x) <= PLAYER_SIZE && Math.abs(a.y - b.y) <= PLAYER_SIZE;
+    }
+
     // Move on x, then on y. A blocked axis loses its velocity so the other axis can still slide.
-    function stepMachine(unit, dt) {
+    // Obstacles and the other machine both stop that axis. The field edge does not count as a collision.
+    function stepMachine(unit, index, dt) {
       const radius = PLAYER_SIZE / 2;
+      const other = battlefield.players[1 - index];
       let moved = false;
+      let hit = false;
       const rawX = unit.x + unit.vx * dt;
       const tryX = clampNumber(rawX, -FIELD_X_MAX + radius, FIELD_X_MAX - radius);
-      if (collidesWithObstacle(tryX, unit.y, radius)) {
+      const hitObstacleX = collidesWithObstacle(tryX, unit.y, radius);
+      const hitPlayerX = playerSquaresOverlap(tryX, unit.y, other);
+      if (hitObstacleX || hitPlayerX) {
         unit.vx = 0;
+        hit = true;
+        if (hitPlayerX) noteCollision(1 - index);
       } else {
         if (tryX !== unit.x) {
           unit.x = tryX;
@@ -361,8 +381,12 @@
       }
       const rawY = unit.y + unit.vy * dt;
       const tryY = clampNumber(rawY, -FIELD_Y_MAX + radius, FIELD_Y_MAX - radius);
-      if (collidesWithObstacle(unit.x, tryY, radius)) {
+      const hitObstacleY = collidesWithObstacle(unit.x, tryY, radius);
+      const hitPlayerY = playerSquaresOverlap(unit.x, tryY, other);
+      if (hitObstacleY || hitPlayerY) {
         unit.vy = 0;
+        hit = true;
+        if (hitPlayerY) noteCollision(1 - index);
       } else {
         if (tryY !== unit.y) {
           unit.y = tryY;
@@ -370,7 +394,7 @@
         }
         if (tryY !== rawY) unit.vy = 0;
       }
-      return moved;
+      return { moved: moved, hit: hit };
     }
 
     function clampFuel(fuel) {
@@ -414,8 +438,16 @@
           const next = approachVelocity(unit.vx, unit.vy, targetX, targetY, dt);
           unit.vx = next.x;
           unit.vy = next.y;
-          moved = stepMachine(unit, dt);
+          const step = stepMachine(unit, index, dt);
+          moved = step.moved;
+          if (step.hit) noteCollision(index);
         }
+        const other = battlefield.players[1 - index];
+        if (playersTouch(unit, other)) {
+          noteCollision(index);
+          noteCollision(1 - index);
+        }
+        if (collidesWithObstacle(unit.x, unit.y, PLAYER_SIZE / 2)) noteCollision(index);
       }
       if (player.refueling && machineStarted) {
         unit.fuel = clampFuel(unit.fuel + dt * MAX_FUEL / REFUEL_SECONDS_FULL);
@@ -579,6 +611,7 @@
       updateCountdown(time);
       updatePingWarnings();
       updateFuelWarnings();
+      updateCollisionWarnings();
       flushBattlefield(time, false);
       draw();
       requestAnimationFrame(frame);
@@ -725,8 +758,8 @@
       return getStationLayout(room).joystick;
     }
 
-    // Tall bar touching the joystick on the side that faces the middle of this room.
-    function getFuelRect(room) {
+    // Gauge stacked on the refuel button. Together they match the joystick, on its inner side.
+    function fuelColumnRect(room) {
       const joy = getJoystickRect(room);
       let width = FUEL_GAUGE_WIDTH;
       const maxRight = room.right - 8;
@@ -739,17 +772,28 @@
       };
     }
 
-    // Small button under the gauge. If the floor is too close, it sits beside the gauge instead.
     function getRefuelRect(room) {
-      const fuel = getFuelRect(room);
-      const height = REFUEL_BUTTON_HEIGHT;
-      let y = fuel.y + fuel.height;
-      let x = fuel.x;
-      if (y + height > canvas.height - 8) {
-        x = fuel.x + fuel.width;
-        y = fuel.y + fuel.height - height;
-      }
-      return { x: x, y: y, width: fuel.width, height: height };
+      const column = fuelColumnRect(room);
+      let height = column.height * REFUEL_HEIGHT_RATIO;
+      if (height < 1) height = 1;
+      if (height > column.height - 1) height = column.height - 1;
+      return {
+        x: column.x,
+        y: column.y + column.height - height,
+        width: column.width,
+        height: height
+      };
+    }
+
+    function getFuelRect(room) {
+      const column = fuelColumnRect(room);
+      const button = getRefuelRect(room);
+      return {
+        x: column.x,
+        y: column.y,
+        width: column.width,
+        height: column.height - button.height
+      };
     }
 
     // Square around the palm. Fingers are outside this box on purpose.
@@ -1136,6 +1180,12 @@
       return clampFuel(battlefield.players[index].fuel);
     }
 
+    // Empty tank, or a fill that is already running (so the player can cancel it).
+    function refuelUsable(player) {
+      if (player.refueling) return true;
+      return fuelOf(player) <= 0;
+    }
+
     function fuelFillColor(fuel) {
       if (fuel < LOW_FUEL_PERCENT) return COLOR_FUEL_LOW;
       if (fuel <= 50) return COLOR_FUEL_MID;
@@ -1194,6 +1244,7 @@
 
     function drawRefuelStation(room, player) {
       const rect = getRefuelRect(room);
+      const usable = refuelUsable(player);
       const near = stationNearHand(player, room) === "refuel";
       ctx.save();
       drawBeveledRect(rect);
@@ -1205,7 +1256,11 @@
         drawBolt(rect.x + inset, rect.y + rect.height - inset, boltR);
         drawBolt(rect.x + rect.width - inset, rect.y + rect.height - inset, boltR);
       }
-      ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
+      if (!usable) {
+        ctx.fillStyle = "rgba(8, 8, 12, 0.45)";
+        ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+      }
+      ctx.fillStyle = usable ? COLOR_JOYSTICK_LABEL_TEXT : COLOR_REFUEL_DISABLED;
       ctx.font = "bold 10px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
@@ -1214,13 +1269,15 @@
       if (player.refueling) {
         const step = Math.floor((frameTime / 1000) / REFUEL_BLINK_SECONDS);
         led = step % 2 === 0 ? COLOR_REFUEL_LED : "#5a3a10";
+      } else if (machineStarted && fuelOf(player) <= 0) {
+        led = COLOR_REFUEL_LED;
       }
       ctx.fillStyle = led;
       ctx.beginPath();
       ctx.arc(rect.x + rect.width / 2, rect.y + rect.height * 0.68, 5, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
-      if (near && machineStarted) drawInteractOutline(rect);
+      if (near && machineStarted && usable) drawInteractOutline(rect);
     }
 
     // Soft pulse around the station the hand can use. The station itself does not brighten.
@@ -1336,6 +1393,22 @@
         const low = fuel > 0 && fuel < LOW_FUEL_PERCENT;
         setWarningLine(players[i], "low-fuel", LOW_FUEL_TEXT, low, COLOR_FUEL_MID);
         setWarningLine(players[i], "out-of-fuel", OUT_OF_FUEL_TEXT, empty);
+      }
+    }
+
+    // Pushed forward on every contact, so the line stays up during a hit and briefly after.
+    let collisionUntil = [0, 0];
+
+    function noteCollision(index) {
+      const until = frameTime + COLLISION_HOLD_SECONDS * 1000;
+      if (until > collisionUntil[index]) collisionUntil[index] = until;
+    }
+
+    function updateCollisionWarnings() {
+      const players = [player1, player2];
+      for (let i = 0; i < players.length; i++) {
+        const active = machineStarted && frameTime < collisionUntil[i];
+        setWarningLine(players[i], "collision", COLLISION_TEXT, active);
       }
     }
 
@@ -1716,6 +1789,8 @@
           bestDist = dist;
         }
       }
+      // A full tank keeps the button in the way, but the press does nothing.
+      if (bestKind === "refuel" && !refuelUsable(player)) return "";
       return bestKind;
     }
 
@@ -1751,6 +1826,7 @@
         return;
       }
       if (kind === "refuel") {
+        if (!refuelUsable(player)) return;
         player.refueling = true;
         return;
       }
