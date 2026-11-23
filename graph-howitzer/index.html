@@ -111,12 +111,18 @@
     const COLOR_RED_PING_OFF = "#3a1518";
     const COLOR_RED_PING_ON = "#ff2a2a";
     // Big joystick on the left side of the room. The hand grips it in place. No fuel yet.
-    const JOYSTICK_SIZE_RATIO = 2.5; // plate side is about 2.5 times the radar side
+    const JOYSTICK_SIZE_RATIO = 1.8; // plate side is about 1.8 times the radar side
     const JOYSTICK_WELL_RATIO = 0.56; // dark circle in the middle of the plate
-    const JOYSTICK_REST_LEAN = 0.7; // stick points up until a direction is pressed
+    const JOYSTICK_REST_LEAN = 0.7; // the idle picture points up; a gripped stick rests at the center
     const JOYSTICK_STICK_RATIO = 0.28; // how far the knob can lean, compared with the plate
     const JOYSTICK_KNOB_RATIO = 0.16;
-    const MOVE_SPEED = 8; // battlefield units per second
+    // Held keys push the knob out at a steady speed. Letting go springs it back faster.
+    const STICK_FULL_SECONDS = 0.8; // center to full tilt
+    const STICK_RETURN_SECONDS = 0.5; // full tilt back to center
+    const MAX_MOVE_SPEED = 8; // battlefield units per second at full tilt
+    const ACCELERATION = 3; // units per second squared; about 2.5 seconds from a stop to full speed
+    const DECELERATION = 5; // units per second squared; slows down a bit faster than it speeds up
+    const MOVE_STATUS_SPEED = 0.2; // slower than this, the status returns to Intact
     const STATE_PUBLISH_SECONDS = 0.1; // tell the viewer about 10 times a second
     const COLOR_JOYSTICK_WELL = "#222228";
     const COLOR_JOYSTICK_STICK = "#8d8d99";
@@ -129,8 +135,8 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, status: "Intact" };
-    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, status: "Intact" };
+    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, tiltX: 0, tiltY: 0, status: "Intact" };
+    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, tiltX: 0, tiltY: 0, status: "Intact" };
 
     // The wall sits in the middle. Each player owns one side of it.
     function getRooms() {
@@ -246,42 +252,107 @@
       return value;
     }
 
-    // Move on x, then on y, so a blocked axis still lets the machine slide along a wall.
-    function stepMachine(unit, dir, dt) {
-      if (dir.x === 0 && dir.y === 0) return false;
+    // Move the tilt toward a point at a steady speed. Magnitude stays inside the unit circle.
+    function moveTiltToward(player, desiredX, desiredY, speed, dt) {
+      const dx = desiredX - player.tiltX;
+      const dy = desiredY - player.tiltY;
+      const dist = Math.hypot(dx, dy);
+      const step = speed * dt;
+      if (dist <= step) {
+        player.tiltX = desiredX;
+        player.tiltY = desiredY;
+      } else if (dist > 0) {
+        player.tiltX += (dx / dist) * step;
+        player.tiltY += (dy / dist) * step;
+      }
+      const mag = Math.hypot(player.tiltX, player.tiltY);
+      if (mag > 1) {
+        player.tiltX /= mag;
+        player.tiltY /= mag;
+      }
+    }
+
+    // Held keys lean the knob out. No keys: it springs back to the center.
+    function updateStick(player, dt) {
+      if (!player.gripping) return;
+      const desired = battlefieldStick(player);
+      const returning = desired.x === 0 && desired.y === 0;
+      const speed = returning ? 1 / STICK_RETURN_SECONDS : 1 / STICK_FULL_SECONDS;
+      moveTiltToward(player, desired.x, desired.y, speed, dt);
+    }
+
+    // Slide the velocity vector toward the target. Slowing uses the faster rate.
+    function approachVelocity(vx, vy, targetX, targetY, dt) {
+      const dx = targetX - vx;
+      const dy = targetY - vy;
+      const dist = Math.hypot(dx, dy);
+      if (dist === 0) return { x: vx, y: vy };
+      const currentSpeed = Math.hypot(vx, vy);
+      const targetSpeed = Math.hypot(targetX, targetY);
+      let slowing = targetSpeed < currentSpeed;
+      if (vx * dx + vy * dy < 0) slowing = true;
+      const rate = slowing ? DECELERATION : ACCELERATION;
+      const step = rate * dt;
+      if (dist <= step) return { x: targetX, y: targetY };
+      return { x: vx + dx * (step / dist), y: vy + dy * (step / dist) };
+    }
+
+    // Move on x, then on y. A blocked axis loses its velocity so the other axis can still slide.
+    function stepMachine(unit, dt) {
       const radius = PLAYER_SIZE / 2;
       let moved = false;
-      const tryX = clampNumber(unit.x + dir.x * MOVE_SPEED * dt, -FIELD_X_MAX + radius, FIELD_X_MAX - radius);
-      if (tryX !== unit.x && !collidesWithObstacle(tryX, unit.y, radius)) {
-        unit.x = tryX;
-        moved = true;
+      const rawX = unit.x + unit.vx * dt;
+      const tryX = clampNumber(rawX, -FIELD_X_MAX + radius, FIELD_X_MAX - radius);
+      if (collidesWithObstacle(tryX, unit.y, radius)) {
+        unit.vx = 0;
+      } else {
+        if (tryX !== unit.x) {
+          unit.x = tryX;
+          moved = true;
+        }
+        if (tryX !== rawX) unit.vx = 0;
       }
-      const tryY = clampNumber(unit.y + dir.y * MOVE_SPEED * dt, -FIELD_Y_MAX + radius, FIELD_Y_MAX - radius);
-      if (tryY !== unit.y && !collidesWithObstacle(unit.x, tryY, radius)) {
-        unit.y = tryY;
-        moved = true;
+      const rawY = unit.y + unit.vy * dt;
+      const tryY = clampNumber(rawY, -FIELD_Y_MAX + radius, FIELD_Y_MAX - radius);
+      if (collidesWithObstacle(unit.x, tryY, radius)) {
+        unit.vy = 0;
+      } else {
+        if (tryY !== unit.y) {
+          unit.y = tryY;
+          moved = true;
+        }
+        if (tryY !== rawY) unit.vy = 0;
       }
       return moved;
     }
 
-    // Keys drive the machine only while this player's hand is gripping the joystick.
-    // The machine stays put until H.O.W.L.E.R has started.
+    // The stick sets a target speed. The machine eases toward it, and coasts after the hand lets go.
+    // Nothing moves until H.O.W.L.E.R has started.
     function updateMachine(player, index, dt) {
+      updateStick(player, dt);
+      const unit = battlefield.players[index];
       let moved = false;
-      if (player.gripping && machineStarted) {
-        moved = stepMachine(battlefield.players[index], battlefieldStick(player), dt);
+      if (machineStarted) {
+        let targetX = 0;
+        let targetY = 0;
+        if (player.gripping) {
+          targetX = player.tiltX * MAX_MOVE_SPEED;
+          targetY = player.tiltY * MAX_MOVE_SPEED;
+        }
+        const next = approachVelocity(unit.vx, unit.vy, targetX, targetY, dt);
+        unit.vx = next.x;
+        unit.vy = next.y;
+        moved = stepMachine(unit, dt);
       }
-      if (moved) setStatus(player, "Moving");
+      const speed = Math.hypot(unit.vx, unit.vy);
+      if (speed > MOVE_STATUS_SPEED) setStatus(player, "Moving");
       else if (player.status === "Moving") setStatus(player, "Intact");
       return moved;
     }
 
-    // No direction key: the stick stands up. A held direction leans the knob that way.
+    // A gripped stick uses its tilt. The idle station still points up.
     function joystickTilt(player) {
-      if (player.gripping) {
-        const tilt = battlefieldStick(player);
-        if (tilt.x !== 0 || tilt.y !== 0) return tilt;
-      }
+      if (player.gripping) return { x: player.tiltX, y: player.tiltY };
       return { x: 0, y: JOYSTICK_REST_LEAN };
     }
 
@@ -950,6 +1021,8 @@
     function tryInteract(player, room) {
       if (player.gripping) {
         player.gripping = false;
+        player.tiltX = 0;
+        player.tiltY = 0;
         return;
       }
       if (player.panelOpen) {
@@ -961,6 +1034,8 @@
       if (!kind) return;
       if (kind === "joystick") {
         player.gripping = true;
+        player.tiltX = 0;
+        player.tiltY = 0;
         placeHandOnKnob(player, room);
         return;
       }
@@ -1170,8 +1245,8 @@
     // Hidden map. It is not drawn in the rooms. The viewer tab reads this object.
     function makeBattlefield() {
       const players = [
-        { x: -60, y: 0, health: MAX_HEALTH },
-        { x: 60, y: 0, health: MAX_HEALTH }
+        { x: -60, y: 0, health: MAX_HEALTH, vx: 0, vy: 0 },
+        { x: 60, y: 0, health: MAX_HEALTH, vx: 0, vy: 0 }
       ];
       return {
         width: FIELD_X_MAX * 2,
