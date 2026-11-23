@@ -429,11 +429,6 @@
       return Math.round((health / MAX_HEALTH) * 100);
     }
 
-    function rectsOverlap(a, b, pad) {
-      return a.x < b.x + b.width + pad && a.x + a.width + pad > b.x &&
-        a.y < b.y + b.height + pad && a.y + a.height + pad > b.y;
-    }
-
     // Monitor and radar in one horizontal band. Three equal gaps inside that band.
     function stationRow(leftEdge, rightEdge, radarSize, monitorHeight, gap) {
       const width = Math.max(1, rightEdge - leftEdge);
@@ -473,19 +468,23 @@
       };
     }
 
-    // Big plate on the left, centered top to bottom, kept inside the room.
-    function joystickPlate(room, radarSize, margin) {
+    // Big plate on the left, centered top to bottom, in the open space under the stations.
+    // The monitor and radar stay where they are. Only the joystick moves to fit.
+    function joystickPlate(room, radarSize, margin, row) {
       const roomWidth = room.right - room.left;
+      const rowBottom = row.monitor.y + Math.max(row.monitor.height, row.radar.height);
+      const freeTop = rowBottom + margin;
+      const bottomLimit = canvas.height - margin;
       let size = radarSize * JOYSTICK_SIZE_RATIO;
-      const maxHeight = canvas.height - margin * 2;
+      const freeHeight = bottomLimit - freeTop;
       const maxWidth = roomWidth - margin * 2;
-      if (size > maxHeight) size = maxHeight;
+      if (freeHeight > 36 && size > freeHeight) size = freeHeight;
       if (size > maxWidth) size = maxWidth;
       if (size < 36) size = 36;
 
       let y = (canvas.height - size) / 2;
-      if (y < margin) y = margin;
-      if (y + size > canvas.height - margin) y = canvas.height - margin - size;
+      if (y < freeTop) y = freeTop;
+      if (y + size > bottomLimit) y = Math.max(margin, bottomLimit - size);
 
       return {
         x: room.left + margin,
@@ -495,8 +494,7 @@
       };
     }
 
-    // Three equal gaps. The monitor width is whatever is left after the square radar.
-    // A joystick that would cover that row pushes the row into the right side of the room.
+    // Three equal gaps across the whole room. The monitor and radar are not shifted.
     function getStationLayout(room) {
       const roomWidth = room.right - room.left;
       let height = canvas.height * MONITOR_HEIGHT_RATIO;
@@ -507,17 +505,11 @@
 
       const radarSize = height;
       const gap = roomWidth * STATION_GAP_RATIO;
-      const joystick = joystickPlate(room, radarSize, gap);
-      let row = stationRow(room.left, room.right, radarSize, height, gap);
-      const hitsRow = rectsOverlap(joystick, row.monitor, gap) || rectsOverlap(joystick, row.radar, gap);
-      if (hitsRow) {
-        const rowLeft = joystick.x + joystick.width + gap;
-        if (rowLeft < room.right - 48) row = stationRow(rowLeft, room.right, radarSize, height, gap);
-      }
+      const row = stationRow(room.left, room.right, radarSize, height, gap);
       return {
         monitor: row.monitor,
         radar: row.radar,
-        joystick: joystick
+        joystick: joystickPlate(room, row.radar.width, gap, row)
       };
     }
 
