@@ -23,7 +23,7 @@
     const START_FADE_SECONDS = 0.45; // the button fades away once the hold is finished
     const START_BUTTON_RADIUS = 36; // reaches into both rooms; the wall still blocks the hands
     const START_RING_WIDTH = 9;
-    const WAITING_TEXT = "> SYS: AWAITING OPERATORS...";
+    const WAITING_TEXT = "> Sys: Awaiting operators...";
     // H.O.W.L.E.R = Heavy Ordnance Weapon, Launch-Equation Ranged (said "Howler")
     const MACHINE_NAME = "H.O.W.L.E.R";
     // Drawn hand. The hitbox is a square around the palm. Fingers may stick out.
@@ -80,24 +80,24 @@
     const INTERACT_OUTLINE_WIDTH = 4;
     const INTERACT_PULSE_SECONDS = 1.1; // one soft brighten and dim
     // Health of the machine. Damaged is for later, when health drops.
-    const CONDITION_NAMES = ["INTACT", "DAMAGED"];
+    const CONDITION_NAMES = ["Intact", "Damaged"];
     const CONDITION_COLORS = {
-      INTACT: "#39ff6a",
-      DAMAGED: "#ff4040"
+      Intact: "#39ff6a",
+      Damaged: "#ff4040"
     };
-    // What the machine is doing. IDLE means it is sitting still.
-    const ACTIVITY_NAMES = ["IDLE", "MOVING", "REDIRECTING", "ATTACKING", "REFUELING"];
+    // What the machine is doing. Idle means it is sitting still.
+    const ACTIVITY_NAMES = ["Idle", "Moving", "Redirecting", "Attacking", "Refueling"];
     const ACTIVITY_COLORS = {
-      IDLE: "#39ff6a",
-      MOVING: "#3ee0ff",
-      REDIRECTING: "#ffe14a",
-      ATTACKING: "#ff8a3d",
-      REFUELING: "#ffb020"
+      Idle: "#39ff6a",
+      Moving: "#3ee0ff",
+      Redirecting: "#ffe14a",
+      Attacking: "#ff8a3d",
+      Refueling: "#ffb020"
     };
     const MAX_HEALTH = 100;
-    const PING_WARNING_ENEMY = "> ALERT: HOSTILE SIGNAL DETECTED.";
-    const PING_WARNING_OBSTACLE = "> WARNING: HOSTILE NEAR OBSTACLE.";
-    const PING_WARNING_SELF = "> WARNING: OBSTACLE PROXIMITY < 4 m.";
+    const PING_WARNING_ENEMY = "> Alert: Hostile signal detected.";
+    const PING_WARNING_OBSTACLE = "> Warning: Hostile near obstacle.";
+    const PING_WARNING_SELF = "> Warning: Obstacle proximity < 4 m.";
     // The square shows everything within 20 meters around this player.
     // The square's half-size maps to 20 meters.
     const RADAR_RANGE = 20;
@@ -154,13 +154,13 @@
     const COLOR_REFUEL_DISABLED = "#7a7a84";
     // Adjacent still counts, so a machine pressed against a surface keeps the report.
     const CONTACT_EPSILON = 0.05;
-    const COLLISION_TEXT = "> ALERT: COLLISION DETECTED.";
+    const COLLISION_TEXT = "> Alert: Collision detected.";
     const COLOR_FUEL_HIGH = "#39ff6a";
     const COLOR_FUEL_MID = "#ffe14a";
     const COLOR_FUEL_LOW = "#ff4040";
     const COLOR_REFUEL_LED = "#ffb020";
-    const LOW_FUEL_TEXT = "> WARNING: FUEL LOW (<20%).";
-    const OUT_OF_FUEL_TEXT = "> ALERT: FUEL DEPLETED. PROPULSION OFFLINE.";
+    const LOW_FUEL_TEXT = "> Warning: Fuel low (<20%).";
+    const OUT_OF_FUEL_TEXT = "> Alert: Fuel depleted. Propulsion offline.";
     const STATE_PUBLISH_SECONDS = 0.1; // tell the viewer about 10 times a second
     // Gray and dark metal, like the rest of the console. Sizes below are fractions of the plate.
     const COLOR_JOYSTICK_PLATE = "#3a3a42";
@@ -186,8 +186,8 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "INTACT", activity: "IDLE" };
-    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "INTACT", activity: "IDLE" };
+    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle" };
+    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle" };
 
     // The wall sits in the middle. Each player owns one side of it.
     function getRooms() {
@@ -418,7 +418,7 @@
         if (index !== -1) player.messages.splice(index, 1);
         return;
       }
-      const text = "> REFUEL: IN PROGRESS... " + percent + "%";
+      const text = "> Refuel: In progress... " + percent + "%";
       if (index === -1) player.messages.push({ text: text, color: COLOR_MONITOR_TEXT, kind: "refuel" });
       else player.messages[index].text = text;
     }
@@ -455,7 +455,7 @@
           unit.fuel = MAX_FUEL;
           player.refueling = false;
           setRefuelLine(player, false);
-          addStatusMessage(player, "> REFUEL: COMPLETE. TANK 100%.");
+          addStatusMessage(player, "> Refuel: Complete. Tank 100%.");
         } else {
           setRefuelLine(player, true, Math.round(unit.fuel));
         }
@@ -468,9 +468,9 @@
         }
       }
       const speed = Math.hypot(unit.vx, unit.vy);
-      if (player.refueling) setActivity(player, "REFUELING");
-      else if (speed > MOVE_STATUS_SPEED) setActivity(player, "MOVING");
-      else if (player.activity === "MOVING" || player.activity === "REFUELING") setActivity(player, "IDLE");
+      if (player.refueling) setActivity(player, "Refueling");
+      else if (speed > MOVE_STATUS_SPEED) setActivity(player, "Moving");
+      else if (player.activity === "Moving" || player.activity === "Refueling") setActivity(player, "Idle");
       return moved;
     }
 
@@ -645,12 +645,12 @@
 
     function conditionColor(condition) {
       if (CONDITION_COLORS[condition]) return CONDITION_COLORS[condition];
-      return CONDITION_COLORS.INTACT;
+      return CONDITION_COLORS.Intact;
     }
 
     function activityColor(activity) {
       if (ACTIVITY_COLORS[activity]) return ACTIVITY_COLORS[activity];
-      return ACTIVITY_COLORS.IDLE;
+      return ACTIVITY_COLORS.Idle;
     }
 
     // Health is stored from 0 to MAX_HEALTH. The monitor shows that as a percent.
@@ -1687,10 +1687,11 @@
       return entry.color;
     }
 
-    // "STATUS: INTACT (100%) | IDLE" — condition and health, then what the machine is doing.
+    // "Status: Intact (100%) | Idle" — condition and health, then what the machine is doing.
+    // Font size is the same 16px the monitor used before the log lines went to capitals.
     function drawStatusLine(player, x, y, fontSize) {
       const parts = [
-        { text: "STATUS: ", color: COLOR_MONITOR_TEXT },
+        { text: "Status: ", color: COLOR_MONITOR_TEXT },
         { text: player.condition + " (" + healthPercent(player) + "%)", color: conditionColor(player.condition) },
         { text: " | ", color: COLOR_MONITOR_TEXT },
         { text: player.activity, color: activityColor(player.activity) }
@@ -1910,15 +1911,15 @@
       handleClick(point.x, point.y);
     });
 
-    setCondition(player1, "INTACT");
-    setCondition(player2, "INTACT");
-    setActivity(player1, "IDLE");
-    setActivity(player2, "IDLE");
+    setCondition(player1, "Intact");
+    setCondition(player2, "Intact");
+    setActivity(player1, "Idle");
+    setActivity(player2, "Idle");
 
     // One shared countdown, but each monitor keeps its own line so we can edit it in place.
     function countdownText(secondsLeft) {
-      if (secondsLeft <= 0) return "> BOOT COMPLETE. ALL UNITS NOMINAL.";
-      return "> BOOT SEQUENCE: " + MACHINE_NAME + " ONLINE IN " + secondsLeft + "s";
+      if (secondsLeft <= 0) return "> Boot complete. All units nominal.";
+      return "> Boot sequence: " + MACHINE_NAME + " online in " + secondsLeft + "s";
     }
 
     const countdownLines = [
