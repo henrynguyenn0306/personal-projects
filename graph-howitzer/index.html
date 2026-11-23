@@ -68,15 +68,17 @@
     const COLOR_MONITOR_SCREEN = "#000000";
     const COLOR_MONITOR_TEXT = "#39ff6a";
     const COLOR_MONITOR_WARNING = "#ff4040";
-    // Allowed status names. Moving is set while a joystick is actually driving.
-    const STATUS_NAMES = ["Idle", "Moving", "Redirecting", "Attacking", "Damaged"];
+    // Allowed statuses. Intact is the healthy resting state.
+    // Moving is set while a joystick is actually driving.
+    const STATUS_NAMES = ["Intact", "Moving", "Redirecting", "Attacking", "Damaged"];
     const STATUS_COLORS = {
-      Idle: "#39ff6a",
+      Intact: "#39ff6a",
       Moving: "#3ee0ff",
       Redirecting: "#ffe14a",
       Attacking: "#ff8a3d",
       Damaged: "#ff4040"
     };
+    const MAX_HEALTH = 100;
     const PING_WARNING_ENEMY = "> WARNING: Enemy signal detected!";
     const PING_WARNING_OBSTACLE = "> WARNING: Movement near obstacle detected!";
     // Battlefield units. The square shows everything within 20 units around this player.
@@ -109,7 +111,7 @@
     const COLOR_RED_PING_OFF = "#3a1518";
     const COLOR_RED_PING_ON = "#ff2a2a";
     // Big joystick on the left side of the room. The hand grips it in place. No fuel yet.
-    const JOYSTICK_SIZE_RATIO = 0.9; // plate is a bit smaller than the radar square
+    const JOYSTICK_SIZE_RATIO = 2.5; // plate side is about 2.5 times the radar side
     const JOYSTICK_WELL_RATIO = 0.56; // dark circle in the middle of the plate
     const JOYSTICK_REST_LEAN = 0.7; // stick points up until a direction is pressed
     const JOYSTICK_STICK_RATIO = 0.28; // how far the knob can lean, compared with the plate
@@ -127,8 +129,8 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, status: "Idle" };
-    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, status: "Idle" };
+    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, status: "Intact" };
+    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, status: "Intact" };
 
     // The wall sits in the middle. Each player owns one side of it.
     function getRooms() {
@@ -270,7 +272,7 @@
         moved = stepMachine(battlefield.players[index], battlefieldStick(player), dt);
       }
       if (moved) setStatus(player, "Moving");
-      else if (player.status === "Moving") setStatus(player, "Idle");
+      else if (player.status === "Moving") setStatus(player, "Intact");
       return moved;
     }
 
@@ -415,10 +417,86 @@
 
     function statusColor(status) {
       if (STATUS_COLORS[status]) return STATUS_COLORS[status];
-      return STATUS_COLORS.Idle;
+      return STATUS_COLORS.Intact;
+    }
+
+    // Health is stored from 0 to MAX_HEALTH. The monitor shows that as a percent.
+    function healthPercent(player) {
+      const index = player === player1 ? 0 : 1;
+      let health = battlefield.players[index].health;
+      if (health < 0) health = 0;
+      if (health > MAX_HEALTH) health = MAX_HEALTH;
+      return Math.round((health / MAX_HEALTH) * 100);
+    }
+
+    function rectsOverlap(a, b, pad) {
+      return a.x < b.x + b.width + pad && a.x + a.width + pad > b.x &&
+        a.y < b.y + b.height + pad && a.y + a.height + pad > b.y;
+    }
+
+    // Monitor and radar in one horizontal band. Three equal gaps inside that band.
+    function stationRow(leftEdge, rightEdge, radarSize, monitorHeight, gap) {
+      const width = Math.max(1, rightEdge - leftEdge);
+      let radar = radarSize;
+      let rowGap = gap;
+      let monitorWidth = width - radar - rowGap * 3;
+
+      // A tiny band cannot fit a full-height square. Shrink the radar and keep the gaps equal.
+      const minMonitor = Math.max(36, width * 0.38);
+      if (monitorWidth < minMonitor) {
+        monitorWidth = Math.min(minMonitor, width * 0.5);
+        radar = Math.max(16, (width - monitorWidth) * 0.42);
+        rowGap = (width - monitorWidth - radar) / 3;
+        if (rowGap < 2) {
+          rowGap = 2;
+          const inner = Math.max(8, width - rowGap * 3);
+          radar = Math.max(12, inner * 0.34);
+          monitorWidth = inner - radar;
+          rowGap = (width - monitorWidth - radar) / 3;
+        }
+      }
+
+      const monitor = {
+        x: leftEdge + rowGap,
+        y: MONITOR_TOP,
+        width: Math.max(1, monitorWidth),
+        height: monitorHeight
+      };
+      return {
+        monitor: monitor,
+        radar: {
+          x: monitor.x + monitor.width + rowGap,
+          y: monitor.y,
+          width: radar,
+          height: radar
+        }
+      };
+    }
+
+    // Big plate on the left, centered top to bottom, kept inside the room.
+    function joystickPlate(room, radarSize, margin) {
+      const roomWidth = room.right - room.left;
+      let size = radarSize * JOYSTICK_SIZE_RATIO;
+      const maxHeight = canvas.height - margin * 2;
+      const maxWidth = roomWidth - margin * 2;
+      if (size > maxHeight) size = maxHeight;
+      if (size > maxWidth) size = maxWidth;
+      if (size < 36) size = 36;
+
+      let y = (canvas.height - size) / 2;
+      if (y < margin) y = margin;
+      if (y + size > canvas.height - margin) y = canvas.height - margin - size;
+
+      return {
+        x: room.left + margin,
+        y: y,
+        width: size,
+        height: size
+      };
     }
 
     // Three equal gaps. The monitor width is whatever is left after the square radar.
+    // A joystick that would cover that row pushes the row into the right side of the room.
     function getStationLayout(room) {
       const roomWidth = room.right - room.left;
       let height = canvas.height * MONITOR_HEIGHT_RATIO;
@@ -427,71 +505,19 @@
       if (height < 48 && maxHeight >= 48) height = 48;
       if (height < 1) height = 1;
 
-      let radarSize = height;
-      let gap = roomWidth * STATION_GAP_RATIO;
-      let monitorWidth = roomWidth - radarSize - gap * 3;
-
-      // A tiny room cannot fit a full-height square. Shrink the radar and keep the gaps equal.
-      const minMonitor = Math.max(36, roomWidth * 0.38);
-      if (monitorWidth < minMonitor) {
-        monitorWidth = Math.min(minMonitor, roomWidth * 0.5);
-        radarSize = Math.max(16, (roomWidth - monitorWidth) * 0.42);
-        gap = (roomWidth - monitorWidth - radarSize) / 3;
-        if (gap < 2) {
-          gap = 2;
-          const inner = Math.max(8, roomWidth - gap * 3);
-          radarSize = Math.max(12, inner * 0.34);
-          monitorWidth = inner - radarSize;
-          gap = (roomWidth - monitorWidth - radarSize) / 3;
-        }
+      const radarSize = height;
+      const gap = roomWidth * STATION_GAP_RATIO;
+      const joystick = joystickPlate(room, radarSize, gap);
+      let row = stationRow(room.left, room.right, radarSize, height, gap);
+      const hitsRow = rectsOverlap(joystick, row.monitor, gap) || rectsOverlap(joystick, row.radar, gap);
+      if (hitsRow) {
+        const rowLeft = joystick.x + joystick.width + gap;
+        if (rowLeft < room.right - 48) row = stationRow(rowLeft, room.right, radarSize, height, gap);
       }
-
-      const monitor = {
-        x: room.left + gap,
-        y: MONITOR_TOP,
-        width: monitorWidth,
-        height: height
-      };
-      const radar = {
-        x: monitor.x + monitor.width + gap,
-        y: monitor.y,
-        width: radarSize,
-        height: radarSize
-      };
       return {
-        monitor: monitor,
-        radar: radar,
-        joystick: joystickOnLeft(room, monitor, radar, gap)
-      };
-    }
-
-    // Left side of the room, centered from top to bottom. Same margin as the station gaps.
-    // If that spot would touch the monitor or radar, it is pushed down below them.
-    function joystickOnLeft(room, monitor, radar, gap) {
-      const roomWidth = room.right - room.left;
-      let size = Math.min(radar.width, radar.height) * JOYSTICK_SIZE_RATIO;
-      const maxSize = Math.max(36, roomWidth - gap * 2);
-      if (size > maxSize) size = maxSize;
-      if (size < 36) size = 36;
-
-      const rowBottom = monitor.y + Math.max(monitor.height, radar.height);
-      let y = (canvas.height - size) / 2;
-      if (y < rowBottom + gap) y = rowBottom + gap;
-
-      const bottomLimit = canvas.height - gap;
-      if (y + size > bottomLimit) {
-        size = bottomLimit - y;
-        if (size < 36) {
-          size = 36;
-          y = Math.max(gap, bottomLimit - size);
-        }
-      }
-
-      return {
-        x: room.left + gap,
-        y: y,
-        width: size,
-        height: size
+        monitor: row.monitor,
+        radar: row.radar,
+        joystick: joystick
       };
     }
 
@@ -711,6 +737,15 @@
       ctx.stroke();
     }
 
+    // Faint ring at exactly RADAR_RANGE, same green as the crosshair.
+    function drawRadarRangeCircle(centerX, centerY, radius) {
+      ctx.strokeStyle = COLOR_RADAR_CROSS;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
     function drawRadarCrosshair(screenX, screenY, screenW, screenH, centerX, centerY) {
       ctx.strokeStyle = COLOR_RADAR_CROSS;
       ctx.lineWidth = 1;
@@ -801,10 +836,12 @@
 
       const centerX = screenX + screenW / 2;
       const centerY = screenY + screenH / 2;
+      // Half of the shorter side is RADAR_RANGE. The ring and the sweep both use that.
       const rangePx = Math.min(screenW, screenH) / 2;
       if (!showBlips) drawRadarCrosshair(screenX, screenY, screenW, screenH, centerX, centerY);
       if (showBlips) drawRadarBlips(centerX, centerY, rangePx, ownerIndex);
-      drawRadarSweep(centerX, centerY, Math.hypot(screenW, screenH) / 2);
+      drawRadarSweep(centerX, centerY, rangePx);
+      drawRadarRangeCircle(centerX, centerY, rangePx);
 
       ctx.fillStyle = COLOR_RADAR_YOU;
       ctx.beginPath();
@@ -867,7 +904,7 @@
       ctx.font = fontSize + "px monospace";
       ctx.textAlign = "left";
       ctx.textBaseline = "top";
-      ctx.fillText("Status: " + player.status, screenX + 8, barY + 6);
+      ctx.fillText("Status: " + player.status + " (" + healthPercent(player) + "%)", screenX + 8, barY + 6);
     }
 
     function getZoomRect(room) {
@@ -1013,8 +1050,8 @@
 
     addStatusMessage(player1, "> All systems ready.");
     addStatusMessage(player2, "> All systems ready.");
-    setStatus(player1, "Idle");
-    setStatus(player2, "Idle");
+    setStatus(player1, "Intact");
+    setStatus(player2, "Intact");
 
     // One shared countdown, but each monitor keeps its own line so we can edit it in place.
     function countdownText(secondsLeft) {
@@ -1141,8 +1178,8 @@
     // Hidden map. It is not drawn in the rooms. The viewer tab reads this object.
     function makeBattlefield() {
       const players = [
-        { x: -60, y: 0 },
-        { x: 60, y: 0 }
+        { x: -60, y: 0, health: MAX_HEALTH },
+        { x: 60, y: 0, health: MAX_HEALTH }
       ];
       return {
         width: FIELD_X_MAX * 2,
