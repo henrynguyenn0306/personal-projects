@@ -61,10 +61,9 @@
     const MONITOR_TOP = 56; // sits below the player name
     const STATION_GAP_RATIO = 0.04; // each of those three gaps, as a fraction of the room width
     const MONITOR_BEZEL = 12;
-    const MONITOR_GLOW_DISTANCE = 40; // how close a hand must be to light the frame
+    const MONITOR_GLOW_DISTANCE = 40; // how close a hand must be for the outline to show
     const MONITOR_LINE_HEIGHT = 20;
     const COLOR_MONITOR_FRAME = "#3a3a42";
-    const COLOR_MONITOR_GLOW = "#f2f2f8";
     const COLOR_MONITOR_SCREEN = "#000000";
     const COLOR_MONITOR_TEXT = "#39ff6a";
     const COLOR_MONITOR_WARNING = "#ff4040";
@@ -132,9 +131,22 @@
     const DECELERATION = 5; // units per second squared; slows down a bit faster than it speeds up
     const MOVE_STATUS_SPEED = 0.2; // slower than this, the activity returns to Idle
     const STATE_PUBLISH_SECONDS = 0.1; // tell the viewer about 10 times a second
-    const COLOR_JOYSTICK_WELL = "#222228";
-    const COLOR_JOYSTICK_STICK = "#8d8d99";
-    const COLOR_JOYSTICK_KNOB = "#d8d8e2";
+    // Gray and dark metal, like the rest of the console. Sizes below are fractions of the plate.
+    const COLOR_JOYSTICK_PLATE = "#3a3a42";
+    const COLOR_JOYSTICK_EDGE_LIGHT = "#6c6c78"; // top-left bevel
+    const COLOR_JOYSTICK_EDGE_DARK = "#17171c"; // bottom-right bevel and the recessed well
+    const COLOR_JOYSTICK_BOLT = "#8b8b96";
+    const COLOR_JOYSTICK_WELL = "#141418";
+    const COLOR_JOYSTICK_BOOT = "#32323a"; // rubber ring around the stick
+    const COLOR_JOYSTICK_TICK = "rgba(176, 176, 186, 0.55)";
+    const COLOR_JOYSTICK_STICK = "#8a8a96";
+    const COLOR_JOYSTICK_STICK_GROOVE = "#4e4e58";
+    const COLOR_JOYSTICK_KNOB = "#7a3034"; // metal under the red top
+    const COLOR_JOYSTICK_KNOB_CAP = "#d24545";
+    const COLOR_JOYSTICK_LABEL = "#24242c";
+    const COLOR_JOYSTICK_LABEL_TEXT = "#b7c4b0";
+    const COLOR_JOYSTICK_LED_OFF = "#243028";
+    const COLOR_JOYSTICK_LED_ON = "#3ddc6a"; // lit only while the hand is gripping
 
     const canvas = document.getElementById("room");
     const ctx = canvas.getContext("2d");
@@ -654,7 +666,7 @@
       const near = stationNearHand(player, room) === "monitor";
       const bezel = Math.min(MONITOR_BEZEL, rect.width / 4, rect.height / 4);
 
-      ctx.fillStyle = near ? COLOR_MONITOR_GLOW : COLOR_MONITOR_FRAME;
+      ctx.fillStyle = COLOR_MONITOR_FRAME;
       ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
 
       const screenX = rect.x + bezel;
@@ -669,7 +681,7 @@
     }
 
     // Radar sits beside the monitor. Half of the square is RADAR_RANGE units.
-    // The frame matches the monitor and glows when the hand is near.
+    // The frame matches the monitor. Nearness is only the pulsing outline.
     // The screen stays black until H.O.W.L.E.R starts.
     // The small radar shows the sweep and the center dot only. Blips stay hidden here.
     // The hand passes over it; only the middle wall blocks movement.
@@ -678,7 +690,7 @@
       const bezel = Math.min(MONITOR_BEZEL, rect.width / 4, rect.height / 4);
       const near = stationNearHand(player, room) === "radar";
 
-      ctx.fillStyle = near ? COLOR_MONITOR_GLOW : COLOR_MONITOR_FRAME;
+      ctx.fillStyle = COLOR_MONITOR_FRAME;
       ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
 
       const screenX = rect.x + bezel;
@@ -691,34 +703,189 @@
       if (near) drawInteractOutline(rect);
     }
 
+    // Metal plate. The light edge is the top and left; the dark edge is the bottom and right.
+    function drawBeveledPlate(rect) {
+      const x = rect.x;
+      const y = rect.y;
+      const s = rect.width;
+      const bevel = Math.max(3, s * 0.04);
+      ctx.fillStyle = COLOR_JOYSTICK_EDGE_LIGHT;
+      ctx.fillRect(x, y, s, s);
+      ctx.fillStyle = COLOR_JOYSTICK_EDGE_DARK;
+      ctx.beginPath();
+      ctx.moveTo(x + s, y);
+      ctx.lineTo(x + s, y + s);
+      ctx.lineTo(x, y + s);
+      ctx.lineTo(x + bevel, y + s - bevel);
+      ctx.lineTo(x + s - bevel, y + s - bevel);
+      ctx.lineTo(x + s - bevel, y + bevel);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = COLOR_JOYSTICK_PLATE;
+      ctx.fillRect(x + bevel, y + bevel, s - bevel * 2, s - bevel * 2);
+    }
+
+    function drawBolt(x, y, r) {
+      ctx.fillStyle = COLOR_JOYSTICK_EDGE_DARK;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COLOR_JOYSTICK_BOLT;
+      ctx.beginPath();
+      ctx.arc(x, y, r * 0.7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = COLOR_JOYSTICK_EDGE_DARK;
+      ctx.lineWidth = Math.max(1, r * 0.28);
+      ctx.beginPath();
+      ctx.moveTo(x - r * 0.38, y);
+      ctx.lineTo(x + r * 0.38, y);
+      ctx.stroke();
+    }
+
+    // Four short arrows outside the well: up, right, down, left.
+    function drawDirectionMarks(cx, cy, s) {
+      const wellR = s * JOYSTICK_WELL_RATIO / 2;
+      const radius = wellR + s * 0.05;
+      const dirs = [
+        { x: 0, y: -1 },
+        { x: 1, y: 0 },
+        { x: 0, y: 1 },
+        { x: -1, y: 0 }
+      ];
+      ctx.fillStyle = COLOR_JOYSTICK_TICK;
+      ctx.strokeStyle = COLOR_JOYSTICK_TICK;
+      ctx.lineWidth = Math.max(1, s * 0.012);
+      for (let i = 0; i < dirs.length; i++) {
+        const d = dirs[i];
+        const baseX = cx + d.x * radius;
+        const baseY = cy + d.y * radius;
+        ctx.beginPath();
+        ctx.moveTo(baseX, baseY);
+        ctx.lineTo(baseX + d.x * s * 0.03, baseY + d.y * s * 0.03);
+        ctx.stroke();
+        const tipX = baseX + d.x * s * 0.046;
+        const tipY = baseY + d.y * s * 0.046;
+        const wing = s * 0.016;
+        ctx.beginPath();
+        ctx.moveTo(tipX, tipY);
+        ctx.lineTo(tipX - d.x * wing - d.y * wing, tipY - d.y * wing + d.x * wing);
+        ctx.lineTo(tipX - d.x * wing + d.y * wing, tipY - d.y * wing - d.x * wing);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+
+    // Dark hole, then the rubber boot the stick comes out of.
+    function drawJoystickWell(cx, cy, s) {
+      const wellR = s * JOYSTICK_WELL_RATIO / 2;
+      ctx.fillStyle = COLOR_JOYSTICK_EDGE_DARK;
+      ctx.beginPath();
+      ctx.arc(cx, cy, wellR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#2a2a32";
+      ctx.beginPath();
+      ctx.arc(cx, cy, wellR * 0.9, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COLOR_JOYSTICK_WELL;
+      ctx.beginPath();
+      ctx.arc(cx, cy, wellR * 0.76, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = COLOR_JOYSTICK_BOOT;
+      ctx.lineWidth = Math.max(2, s * 0.028);
+      ctx.beginPath();
+      ctx.arc(cx, cy, wellR * 0.4, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.lineWidth = Math.max(1, s * 0.012);
+      ctx.beginPath();
+      ctx.arc(cx, cy, wellR * 0.52, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    function drawDrivePlate(rect, gripping) {
+      const s = rect.width;
+      const w = s * 0.24;
+      let h = s * 0.065;
+      if (h > s * 0.12) h = s * 0.12;
+      const x = rect.x + (s - w) / 2;
+      const y = rect.y + s - h - Math.max(4, s * 0.04);
+      ctx.fillStyle = COLOR_JOYSTICK_LABEL;
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = COLOR_JOYSTICK_EDGE_LIGHT;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+      ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
+      ctx.font = Math.max(9, Math.floor(s * 0.042)) + "px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("DRIVE", x + w / 2, y + h / 2);
+
+      const ledR = Math.max(2.5, s * 0.016);
+      const ledX = x + w + s * 0.04;
+      const ledY = y + h / 2;
+      ctx.fillStyle = gripping ? COLOR_JOYSTICK_LED_ON : COLOR_JOYSTICK_LED_OFF;
+      ctx.beginPath();
+      ctx.arc(ledX, ledY, ledR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     // Plate, stick, and knob. tiltX is right. tiltY is battlefield up. Each is about -1 to 1.
     function drawStick(cx, cy, reach, knobR, tiltX, tiltY, stickWidth) {
       const knobX = cx + tiltX * reach;
       const knobY = cy - tiltY * reach;
+      const dx = knobX - cx;
+      const dy = knobY - cy;
+      const length = Math.hypot(dx, dy);
       ctx.save();
+      ctx.lineCap = "round";
       ctx.strokeStyle = COLOR_JOYSTICK_STICK;
       ctx.lineWidth = stickWidth;
-      ctx.lineCap = "round";
       ctx.beginPath();
       ctx.moveTo(cx, cy);
       ctx.lineTo(knobX, knobY);
       ctx.stroke();
+      if (length > stickWidth) {
+        const ux = dx / length;
+        const uy = dy / length;
+        const px = -uy;
+        const py = ux;
+        ctx.strokeStyle = COLOR_JOYSTICK_STICK_GROOVE;
+        ctx.lineWidth = Math.max(1, stickWidth * 0.16);
+        for (let i = 1; i <= 4; i++) {
+          const t = 0.28 + (i / 5) * 0.42;
+          const rx = cx + dx * t;
+          const ry = cy + dy * t;
+          const rib = stickWidth * 0.46;
+          ctx.beginPath();
+          ctx.moveTo(rx - px * rib, ry - py * rib);
+          ctx.lineTo(rx + px * rib, ry + py * rib);
+          ctx.stroke();
+        }
+      }
       ctx.fillStyle = COLOR_JOYSTICK_KNOB;
       ctx.beginPath();
       ctx.arc(knobX, knobY, knobR, 0, Math.PI * 2);
       ctx.fill();
+      ctx.fillStyle = COLOR_JOYSTICK_KNOB_CAP;
+      ctx.beginPath();
+      ctx.arc(knobX, knobY, knobR * 0.58, 0, Math.PI * 2);
+      ctx.fill();
       ctx.restore();
     }
 
-    function drawJoystickPlate(rect, near) {
-      ctx.fillStyle = near ? COLOR_MONITOR_GLOW : COLOR_MONITOR_FRAME;
-      ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
-      const cx = rect.x + rect.width / 2;
-      const cy = rect.y + rect.height / 2;
-      ctx.fillStyle = COLOR_JOYSTICK_WELL;
-      ctx.beginPath();
-      ctx.arc(cx, cy, rect.width * JOYSTICK_WELL_RATIO / 2, 0, Math.PI * 2);
-      ctx.fill();
+    // The pivot stays at the middle of the plate, so the hand still lands on the knob.
+    function drawJoystickPlate(rect) {
+      const s = rect.width;
+      const cx = rect.x + s / 2;
+      const cy = rect.y + s / 2;
+      drawBeveledPlate(rect);
+      const inset = s * 0.1;
+      const boltR = Math.max(3, s * 0.026);
+      drawBolt(rect.x + inset, rect.y + inset, boltR);
+      drawBolt(rect.x + s - inset, rect.y + inset, boltR);
+      drawBolt(rect.x + inset, rect.y + s - inset, boltR);
+      drawBolt(rect.x + s - inset, rect.y + s - inset, boltR);
+      drawDirectionMarks(cx, cy, s);
+      drawJoystickWell(cx, cy, s);
       return { cx: cx, cy: cy };
     }
 
@@ -726,7 +893,9 @@
     function drawJoystick(room, player) {
       const rect = getJoystickRect(room);
       const near = stationNearHand(player, room) === "joystick";
-      const spot = drawJoystickPlate(rect, near);
+      ctx.save();
+      const spot = drawJoystickPlate(rect);
+      drawDrivePlate(rect, player.gripping);
       const tilt = joystickTilt(player);
       drawStick(
         spot.cx,
@@ -737,10 +906,11 @@
         tilt.y,
         Math.max(5, rect.width * 0.08)
       );
+      ctx.restore();
       if (near) drawInteractOutline(rect);
     }
 
-    // Soft pulse around the station the hand can use, outside the frame glow.
+    // Soft pulse around the station the hand can use. The station itself does not brighten.
     function drawInteractOutline(rect) {
       const turns = frameTime / 1000 / INTERACT_PULSE_SECONDS;
       const wave = 0.5 + 0.5 * Math.sin(turns * Math.PI * 2);
