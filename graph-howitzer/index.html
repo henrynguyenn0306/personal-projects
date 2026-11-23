@@ -108,13 +108,12 @@
     const RED_PING_BLINK_SECONDS = 0.4;
     const COLOR_RED_PING_OFF = "#3a1518";
     const COLOR_RED_PING_ON = "#ff2a2a";
-    // Joystick station under the monitor and radar. No fuel yet.
-    const JOYSTICK_SIZE = 72;
-    const JOYSTICK_GAP = 20; // space between the station row and the base plate
+    // Big joystick on the left side of the room. The hand grips it in place. No fuel yet.
+    const JOYSTICK_SIZE_RATIO = 0.9; // plate is a bit smaller than the radar square
     const JOYSTICK_WELL_RATIO = 0.56; // dark circle in the middle of the plate
-    const JOYSTICK_ICON_LEAN = 0.7; // the room stick rests pointing up
-    const JOYSTICK_STICK_RATIO = 0.22; // how far the big knob can lean, compared with the plate
-    const JOYSTICK_KNOB_RATIO = 0.13;
+    const JOYSTICK_REST_LEAN = 0.7; // stick points up until a direction is pressed
+    const JOYSTICK_STICK_RATIO = 0.28; // how far the knob can lean, compared with the plate
+    const JOYSTICK_KNOB_RATIO = 0.16;
     const MOVE_SPEED = 8; // battlefield units per second
     const STATE_PUBLISH_SECONDS = 0.1; // tell the viewer about 10 times a second
     const COLOR_JOYSTICK_WELL = "#222228";
@@ -128,8 +127,8 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", status: "Idle" };
-    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", status: "Idle" };
+    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, status: "Idle" };
+    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, status: "Idle" };
 
     // The wall sits in the middle. Each player owns one side of it.
     function getRooms() {
@@ -263,12 +262,11 @@
       return moved;
     }
 
-    // Keys drive the machine only while this player's joystick panel is open.
+    // Keys drive the machine only while this player's hand is gripping the joystick.
     // The machine stays put until H.O.W.L.E.R has started.
     function updateMachine(player, index, dt) {
-      const driving = player.panelOpen && player.panelKind === "joystick";
       let moved = false;
-      if (driving && machineStarted) {
+      if (player.gripping && machineStarted) {
         moved = stepMachine(battlefield.players[index], battlefieldStick(player), dt);
       }
       if (moved) setStatus(player, "Moving");
@@ -276,14 +274,43 @@
       return moved;
     }
 
+    // No direction key: the stick stands up. A held direction leans the knob that way.
+    function joystickTilt(player) {
+      if (player.gripping) {
+        const tilt = battlefieldStick(player);
+        if (tilt.x !== 0 || tilt.y !== 0) return tilt;
+      }
+      return { x: 0, y: JOYSTICK_REST_LEAN };
+    }
+
+    function joystickKnob(room, player) {
+      const rect = getJoystickRect(room);
+      const reach = rect.width * JOYSTICK_STICK_RATIO;
+      const tilt = joystickTilt(player);
+      return {
+        x: rect.x + rect.width / 2 + tilt.x * reach,
+        y: rect.y + rect.height / 2 - tilt.y * reach
+      };
+    }
+
+    // The gripped hand sits on the knob, including while the knob leans.
+    function placeHandOnKnob(player, room) {
+      const knob = joystickKnob(room, player);
+      player.x = knob.x;
+      player.y = knob.y;
+      clampHand(player, room);
+    }
+
     function update(dt) {
       const rooms = getRooms();
-      // An open zoom panel freezes that hand. The other player keeps moving.
-      if (!player1.panelOpen) moveHand(player1, direction("w", "s", "a", "d"), dt, rooms.left);
-      if (!player2.panelOpen) moveHand(player2, direction("ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"), dt, rooms.right);
+      // A zoom panel freezes that hand. A gripped joystick pins it to the knob instead.
+      if (!player1.panelOpen && !player1.gripping) moveHand(player1, direction("w", "s", "a", "d"), dt, rooms.left);
+      if (!player2.panelOpen && !player2.gripping) moveHand(player2, direction("ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"), dt, rooms.right);
 
       const moved1 = updateMachine(player1, 0, dt);
       const moved2 = updateMachine(player2, 1, dt);
+      if (player1.gripping) placeHandOnKnob(player1, rooms.left);
+      if (player2.gripping) placeHandOnKnob(player2, rooms.right);
       if (moved1 || moved2) battlefieldDirty = true;
       // The last small step must be saved even if the throttle window has not ended.
       if ((player1WasMoving && !moved1) || (player2WasMoving && !moved2)) flushBattlefield(frameTime, true);
@@ -293,7 +320,7 @@
 
     function drawHand(hand, color) {
       ctx.fillStyle = color;
-      const holding = hand.panelOpen;
+      const holding = hand.panelOpen || hand.gripping;
       const pull = holding ? HOLD_FINGER_PULL : 1;
       const sizeRatio = holding ? HOLD_FINGER_RADIUS_RATIO : 1;
 
@@ -434,26 +461,35 @@
       return {
         monitor: monitor,
         radar: radar,
-        joystick: joystickUnderRow(monitor, radar)
+        joystick: joystickOnLeft(room, monitor, radar, gap)
       };
     }
 
-    // Centered under the monitor and radar, with a gap so it does not touch them.
-    function joystickUnderRow(monitor, radar) {
-      const rowLeft = monitor.x;
-      const rowRight = radar.x + radar.width;
+    // Left side of the room, centered from top to bottom. Same margin as the station gaps.
+    // If that spot would touch the monitor or radar, it is pushed down below them.
+    function joystickOnLeft(room, monitor, radar, gap) {
+      const roomWidth = room.right - room.left;
+      let size = Math.min(radar.width, radar.height) * JOYSTICK_SIZE_RATIO;
+      const maxSize = Math.max(36, roomWidth - gap * 2);
+      if (size > maxSize) size = maxSize;
+      if (size < 36) size = 36;
+
       const rowBottom = monitor.y + Math.max(monitor.height, radar.height);
-      let size = JOYSTICK_SIZE;
-      const rowWidth = Math.max(1, rowRight - rowLeft);
-      if (size > rowWidth) size = rowWidth;
-      const roomBottom = canvas.height - 16;
-      if (rowBottom + JOYSTICK_GAP + size > roomBottom) {
-        size = roomBottom - rowBottom - JOYSTICK_GAP;
+      let y = (canvas.height - size) / 2;
+      if (y < rowBottom + gap) y = rowBottom + gap;
+
+      const bottomLimit = canvas.height - gap;
+      if (y + size > bottomLimit) {
+        size = bottomLimit - y;
+        if (size < 36) {
+          size = 36;
+          y = Math.max(gap, bottomLimit - size);
+        }
       }
-      if (size < 24) size = 24;
+
       return {
-        x: rowLeft + (rowWidth - size) / 2,
-        y: rowBottom + JOYSTICK_GAP,
+        x: room.left + gap,
+        y: y,
         width: size,
         height: size
       };
@@ -572,41 +608,20 @@
       return { cx: cx, cy: cy };
     }
 
-    // Small station in the room. The stick here is only a picture. It does not tilt.
+    // The stick stands in the room. While the hand grips it, the knob leans with the keys.
     function drawJoystick(room, player) {
       const rect = getJoystickRect(room);
       const near = stationNearHand(player, room) === "joystick";
       const spot = drawJoystickPlate(rect, near);
+      const tilt = joystickTilt(player);
       drawStick(
         spot.cx,
         spot.cy,
         rect.width * JOYSTICK_STICK_RATIO,
         rect.width * JOYSTICK_KNOB_RATIO,
-        0,
-        JOYSTICK_ICON_LEAN,
-        Math.max(3, rect.width * 0.07)
-      );
-    }
-
-    // Big stick while the panel is open. No keys means the knob sits in the center.
-    function drawBigJoystick(player, screenX, screenY, screenW, screenH) {
-      const size = Math.min(screenW, screenH) * 0.72;
-      const rect = {
-        x: screenX + (screenW - size) / 2,
-        y: screenY + (screenH - size) / 2,
-        width: size,
-        height: size
-      };
-      const spot = drawJoystickPlate(rect, false);
-      const tilt = battlefieldStick(player);
-      drawStick(
-        spot.cx,
-        spot.cy,
-        size * JOYSTICK_STICK_RATIO,
-        size * JOYSTICK_KNOB_RATIO,
         tilt.x,
         tilt.y,
-        Math.max(6, size * 0.035)
+        Math.max(5, rect.width * 0.08)
       );
     }
 
@@ -901,8 +916,13 @@
       return bestKind;
     }
 
-    // Open the station the hand is near. Press the same key again to close.
+    // Monitor and radar open a zoom panel. The joystick snaps the hand onto its knob.
+    // Press the same key again to let go. The hand stays where the knob is.
     function tryInteract(player, room) {
+      if (player.gripping) {
+        player.gripping = false;
+        return;
+      }
       if (player.panelOpen) {
         player.panelOpen = false;
         player.panelKind = "";
@@ -910,6 +930,11 @@
       }
       const kind = stationNearHand(player, room);
       if (!kind) return;
+      if (kind === "joystick") {
+        player.gripping = true;
+        placeHandOnKnob(player, room);
+        return;
+      }
       player.panelOpen = true;
       player.panelKind = kind;
     }
@@ -933,8 +958,6 @@
       ctx.fillRect(screenX, screenY, screenW, screenH);
       if (player.panelKind === "radar") {
         drawBigRadar(player, screenX, screenY, screenW, screenH);
-      } else if (player.panelKind === "joystick") {
-        drawBigJoystick(player, screenX, screenY, screenW, screenH);
       } else {
         drawMessageList(player, screenX, screenY, screenW, screenH, ZOOM_FONT_SIZE, ZOOM_LINE_HEIGHT);
       }
