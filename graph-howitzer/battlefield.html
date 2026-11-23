@@ -125,7 +125,8 @@
         ctx.beginPath();
         ctx.arc(spot.x, spot.y, radius, 0, Math.PI * 2);
         ctx.fill();
-        drawAxisLabel(names[i], spot.x + radius + 6, spot.y - radius - 2, "left", "bottom");
+        const fuelText = player.fuel === undefined ? "" : " " + Math.round(player.fuel) + "%";
+        drawAxisLabel(names[i] + fuelText, spot.x + radius + 6, spot.y - radius - 2, "left", "bottom");
       }
 
       // Axes, ticks, and numbers are drawn last so obstacles and players never cover them.

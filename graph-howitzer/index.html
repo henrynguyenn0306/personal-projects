@@ -86,12 +86,13 @@
       Damaged: "#ff4040"
     };
     // What the machine is doing. Idle means it is sitting still.
-    const ACTIVITY_NAMES = ["Idle", "Moving", "Redirecting", "Attacking"];
+    const ACTIVITY_NAMES = ["Idle", "Moving", "Redirecting", "Attacking", "Refueling"];
     const ACTIVITY_COLORS = {
       Idle: "#39ff6a",
       Moving: "#3ee0ff",
       Redirecting: "#ffe14a",
-      Attacking: "#ff8a3d"
+      Attacking: "#ff8a3d",
+      Refueling: "#ffb020"
     };
     const MAX_HEALTH = 100;
     const PING_WARNING_ENEMY = "> WARNING: Enemy signal detected!";
@@ -128,7 +129,7 @@
     const RED_PING_BLINK_SECONDS = 0.4;
     const COLOR_RED_PING_OFF = "#3a1518";
     const COLOR_RED_PING_ON = "#ff2a2a";
-    // Big joystick on the left side of the room. The hand grips it in place. No fuel yet.
+    // Big joystick on the left side of the room. The hand grips it in place.
     const JOYSTICK_SIZE_RATIO = 1.8; // plate side is about 1.8 times the radar side
     const JOYSTICK_WELL_RATIO = 0.56; // dark circle in the middle of the plate
     const JOYSTICK_REST_LEAN = 0.7; // the idle picture points up; a gripped stick rests at the center
@@ -141,6 +142,20 @@
     const ACCELERATION = 3; // m/s squared; about 2.5 seconds from a stop to full speed
     const DECELERATION = 5; // m/s squared; slows down a bit faster than it speeds up
     const MOVE_STATUS_SPEED = 0.2; // m/s; slower than this, the activity returns to Idle
+    // Fuel is a percent. It falls only while the machine actually drives. It never refills by itself.
+    const MAX_FUEL = 100;
+    const FUEL_DRAIN_PER_METER = MAX_FUEL / 70; // a full tank lasts about 70 meters
+    const LOW_FUEL_PERCENT = 20;
+    const REFUEL_SECONDS_FULL = 90; // seconds to go from empty to full
+    const REFUEL_BLINK_SECONDS = 0.4;
+    const FUEL_GAUGE_WIDTH = 58; // bar snapped to the joystick, toward the middle of the room
+    const REFUEL_BUTTON_HEIGHT = 64;
+    const COLOR_FUEL_HIGH = "#39ff6a";
+    const COLOR_FUEL_MID = "#ffe14a";
+    const COLOR_FUEL_LOW = "#ff4040";
+    const COLOR_REFUEL_LED = "#ffb020";
+    const LOW_FUEL_TEXT = "> Low fuel!";
+    const OUT_OF_FUEL_TEXT = "> Out of fuel!";
     const STATE_PUBLISH_SECONDS = 0.1; // tell the viewer about 10 times a second
     // Gray and dark metal, like the rest of the console. Sizes below are fractions of the plate.
     const COLOR_JOYSTICK_PLATE = "#3a3a42";
@@ -166,8 +181,8 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle" };
-    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle" };
+    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle" };
+    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle" };
 
     // The wall sits in the middle. Each player owns one side of it.
     function getRooms() {
@@ -358,27 +373,72 @@
       return moved;
     }
 
+    function clampFuel(fuel) {
+      if (fuel < 0) return 0;
+      if (fuel > MAX_FUEL) return MAX_FUEL;
+      return fuel;
+    }
+
+    // One line whose text changes while the tank is filling. Removed when refueling stops.
+    function setRefuelLine(player, active, percent) {
+      const index = warningIndex(player, "refuel");
+      if (!active) {
+        if (index !== -1) player.messages.splice(index, 1);
+        return;
+      }
+      const text = "> Refueling... " + percent + "%";
+      if (index === -1) player.messages.push({ text: text, color: COLOR_MONITOR_TEXT, kind: "refuel" });
+      else player.messages[index].text = text;
+    }
+
     // The stick sets a target speed. The machine eases toward it, and coasts after the hand lets go.
+    // An empty tank cannot speed up. Refueling locks the machine until the player cancels or the tank is full.
     // Nothing moves until H.O.W.L.E.R has started.
     function updateMachine(player, index, dt) {
       updateStick(player, dt);
       const unit = battlefield.players[index];
+      const x0 = unit.x;
+      const y0 = unit.y;
       let moved = false;
       if (machineStarted) {
-        let targetX = 0;
-        let targetY = 0;
-        if (player.gripping) {
-          targetX = player.tiltX * MAX_MOVE_SPEED;
-          targetY = player.tiltY * MAX_MOVE_SPEED;
+        if (player.refueling) {
+          unit.vx = 0;
+          unit.vy = 0;
+        } else {
+          let targetX = 0;
+          let targetY = 0;
+          if (player.gripping && unit.fuel > 0) {
+            targetX = player.tiltX * MAX_MOVE_SPEED;
+            targetY = player.tiltY * MAX_MOVE_SPEED;
+          }
+          const next = approachVelocity(unit.vx, unit.vy, targetX, targetY, dt);
+          unit.vx = next.x;
+          unit.vy = next.y;
+          moved = stepMachine(unit, dt);
         }
-        const next = approachVelocity(unit.vx, unit.vy, targetX, targetY, dt);
-        unit.vx = next.x;
-        unit.vy = next.y;
-        moved = stepMachine(unit, dt);
+      }
+      if (player.refueling && machineStarted) {
+        unit.fuel = clampFuel(unit.fuel + dt * MAX_FUEL / REFUEL_SECONDS_FULL);
+        if (unit.fuel >= MAX_FUEL) {
+          unit.fuel = MAX_FUEL;
+          player.refueling = false;
+          setRefuelLine(player, false);
+          addStatusMessage(player, "> Fuel tank full.");
+        } else {
+          setRefuelLine(player, true, Math.round(unit.fuel));
+        }
+        battlefieldDirty = true;
+      } else {
+        const distance = Math.hypot(unit.x - x0, unit.y - y0);
+        if (distance > 0 && unit.fuel > 0) {
+          unit.fuel = clampFuel(unit.fuel - distance * FUEL_DRAIN_PER_METER);
+          battlefieldDirty = true;
+        }
       }
       const speed = Math.hypot(unit.vx, unit.vy);
-      if (speed > MOVE_STATUS_SPEED) setActivity(player, "Moving");
-      else if (player.activity === "Moving") setActivity(player, "Idle");
+      if (player.refueling) setActivity(player, "Refueling");
+      else if (speed > MOVE_STATUS_SPEED) setActivity(player, "Moving");
+      else if (player.activity === "Moving" || player.activity === "Refueling") setActivity(player, "Idle");
       return moved;
     }
 
@@ -411,9 +471,13 @@
       player1.panelOpen = false;
       player1.panelKind = "";
       player1.gripping = false;
+      player1.refueling = false;
+      setRefuelLine(player1, false);
       player2.panelOpen = false;
       player2.panelKind = "";
       player2.gripping = false;
+      player2.refueling = false;
+      setRefuelLine(player2, false);
     }
 
     function update(dt) {
@@ -485,6 +549,10 @@
       drawRadar(rooms.right, player2);
       drawJoystick(rooms.left, player1);
       drawJoystick(rooms.right, player2);
+      drawFuelGauge(rooms.left, player1);
+      drawFuelGauge(rooms.right, player2);
+      drawRefuelStation(rooms.left, player1);
+      drawRefuelStation(rooms.right, player2);
       drawStartButton();
 
       // Drawn last so the hand appears on top of the stations.
@@ -510,6 +578,7 @@
       updateStartHold(dt, time);
       updateCountdown(time);
       updatePingWarnings();
+      updateFuelWarnings();
       flushBattlefield(time, false);
       draw();
       requestAnimationFrame(frame);
@@ -654,6 +723,33 @@
 
     function getJoystickRect(room) {
       return getStationLayout(room).joystick;
+    }
+
+    // Tall bar touching the joystick on the side that faces the middle of this room.
+    function getFuelRect(room) {
+      const joy = getJoystickRect(room);
+      let width = FUEL_GAUGE_WIDTH;
+      const maxRight = room.right - 8;
+      if (joy.x + joy.width + width > maxRight) width = Math.max(28, maxRight - joy.x - joy.width);
+      return {
+        x: joy.x + joy.width,
+        y: joy.y,
+        width: width,
+        height: joy.height
+      };
+    }
+
+    // Small button under the gauge. If the floor is too close, it sits beside the gauge instead.
+    function getRefuelRect(room) {
+      const fuel = getFuelRect(room);
+      const height = REFUEL_BUTTON_HEIGHT;
+      let y = fuel.y + fuel.height;
+      let x = fuel.x;
+      if (y + height > canvas.height - 8) {
+        x = fuel.x + fuel.width;
+        y = fuel.y + fuel.height - height;
+      }
+      return { x: x, y: y, width: fuel.width, height: height };
     }
 
     // Square around the palm. Fingers are outside this box on purpose.
@@ -1035,6 +1131,98 @@
       if (near && machineStarted) drawInteractOutline(rect);
     }
 
+    function fuelOf(player) {
+      const index = player === player1 ? 0 : 1;
+      return clampFuel(battlefield.players[index].fuel);
+    }
+
+    function fuelFillColor(fuel) {
+      if (fuel < LOW_FUEL_PERCENT) return COLOR_FUEL_LOW;
+      if (fuel <= 50) return COLOR_FUEL_MID;
+      return COLOR_FUEL_HIGH;
+    }
+
+    // Vertical tank. Green, yellow, or red shows how much is left.
+    function drawFuelGauge(room, player) {
+      const rect = getFuelRect(room);
+      const fuel = fuelOf(player);
+      ctx.save();
+      drawBeveledRect(rect);
+      const boltR = Math.max(2, Math.min(3, rect.width * 0.07));
+      const inset = boltR + 3;
+      drawBolt(rect.x + inset, rect.y + inset, boltR);
+      drawBolt(rect.x + rect.width - inset, rect.y + inset, boltR);
+      drawBolt(rect.x + inset, rect.y + rect.height - inset, boltR);
+      drawBolt(rect.x + rect.width - inset, rect.y + rect.height - inset, boltR);
+
+      ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
+      ctx.font = "bold 11px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("FUEL", rect.x + rect.width / 2, rect.y + 16);
+      ctx.fillStyle = machineStarted ? COLOR_JOYSTICK_LED_ON : COLOR_JOYSTICK_LED_OFF;
+      ctx.beginPath();
+      ctx.arc(rect.x + rect.width / 2, rect.y + 30, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      const tankX = rect.x + 12;
+      const tankY = rect.y + 42;
+      const tankW = Math.max(8, rect.width - 24);
+      const tankH = Math.max(8, rect.height - 76);
+      ctx.fillStyle = COLOR_JOYSTICK_WELL;
+      ctx.fillRect(tankX, tankY, tankW, tankH);
+      const fillH = tankH * (fuel / MAX_FUEL);
+      ctx.fillStyle = fuelFillColor(fuel);
+      ctx.fillRect(tankX, tankY + tankH - fillH, tankW, fillH);
+
+      ctx.strokeStyle = COLOR_JOYSTICK_TICK;
+      ctx.lineWidth = 1;
+      const marks = [0.25, 0.5, 0.75];
+      for (let i = 0; i < marks.length; i++) {
+        const y = tankY + tankH * (1 - marks[i]);
+        ctx.beginPath();
+        ctx.moveTo(tankX, y);
+        ctx.lineTo(tankX + tankW, y);
+        ctx.stroke();
+      }
+
+      ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
+      ctx.font = "bold 12px sans-serif";
+      ctx.fillText(Math.round(fuel) + "%", rect.x + rect.width / 2, rect.y + rect.height - 16);
+      ctx.restore();
+    }
+
+    function drawRefuelStation(room, player) {
+      const rect = getRefuelRect(room);
+      const near = stationNearHand(player, room) === "refuel";
+      ctx.save();
+      drawBeveledRect(rect);
+      const boltR = Math.max(2, Math.min(3, rect.width * 0.07));
+      const inset = boltR + 2;
+      if (rect.width > inset * 2 + 8 && rect.height > inset * 2 + 8) {
+        drawBolt(rect.x + inset, rect.y + inset, boltR);
+        drawBolt(rect.x + rect.width - inset, rect.y + inset, boltR);
+        drawBolt(rect.x + inset, rect.y + rect.height - inset, boltR);
+        drawBolt(rect.x + rect.width - inset, rect.y + rect.height - inset, boltR);
+      }
+      ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
+      ctx.font = "bold 10px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("REFUEL", rect.x + rect.width / 2, rect.y + rect.height * 0.36);
+      let led = COLOR_JOYSTICK_LED_OFF;
+      if (player.refueling) {
+        const step = Math.floor((frameTime / 1000) / REFUEL_BLINK_SECONDS);
+        led = step % 2 === 0 ? COLOR_REFUEL_LED : "#5a3a10";
+      }
+      ctx.fillStyle = led;
+      ctx.beginPath();
+      ctx.arc(rect.x + rect.width / 2, rect.y + rect.height * 0.68, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      if (near && machineStarted) drawInteractOutline(rect);
+    }
+
     // Soft pulse around the station the hand can use. The station itself does not brighten.
     function drawInteractOutline(rect) {
       const turns = frameTime / 1000 / INTERACT_PULSE_SECONDS;
@@ -1128,15 +1316,27 @@
     }
 
     // Add the line when the warning turns on. Remove that same line when it turns off.
-    function setWarningLine(player, kind, text, active) {
+    function setWarningLine(player, kind, text, active, color) {
       const index = warningIndex(player, kind);
       if (active) {
         if (index === -1) {
-          player.messages.push({ text: text, color: COLOR_MONITOR_WARNING, kind: kind });
+          player.messages.push({ text: text, color: color || COLOR_MONITOR_WARNING, kind: kind });
         }
         return;
       }
       if (index !== -1) player.messages.splice(index, 1);
+    }
+
+    // Low fuel goes away above 20%, and also when an empty tank replaces it.
+    function updateFuelWarnings() {
+      const players = [player1, player2];
+      for (let i = 0; i < players.length; i++) {
+        const fuel = machineStarted ? battlefield.players[i].fuel : MAX_FUEL;
+        const empty = fuel <= 0;
+        const low = fuel > 0 && fuel < LOW_FUEL_PERCENT;
+        setWarningLine(players[i], "low-fuel", LOW_FUEL_TEXT, low, COLOR_FUEL_MID);
+        setWarningLine(players[i], "out-of-fuel", OUT_OF_FUEL_TEXT, empty);
+      }
     }
 
     // Each warning is its own line. It comes back later if the same thing happens again.
@@ -1502,7 +1702,8 @@
       const stations = [
         { kind: "monitor", rect: getMonitorRect(room) },
         { kind: "radar", rect: getRadarRect(room) },
-        { kind: "joystick", rect: getJoystickRect(room) }
+        { kind: "joystick", rect: getJoystickRect(room) },
+        { kind: "refuel", rect: getRefuelRect(room) }
       ];
       let bestKind = "";
       let bestDist = 0;
@@ -1524,6 +1725,11 @@
       // Stations stay shut until H.O.W.L.E.R has finished starting.
       // The start button watches the held key itself, so this press is ignored.
       if (!machineStarted) return;
+      if (player.refueling) {
+        player.refueling = false;
+        setRefuelLine(player, false);
+        return;
+      }
       if (player.gripping) {
         player.gripping = false;
         player.tiltX = 0;
@@ -1542,6 +1748,10 @@
         player.tiltX = 0;
         player.tiltY = 0;
         placeHandOnKnob(player, room);
+        return;
+      }
+      if (kind === "refuel") {
+        player.refueling = true;
         return;
       }
       player.panelOpen = true;
@@ -1912,8 +2122,8 @@
     // Hidden map. It is not drawn in the rooms. The viewer tab reads this object.
     function makeBattlefield() {
       const players = [
-        { x: -60, y: 0, health: MAX_HEALTH, vx: 0, vy: 0 },
-        { x: 60, y: 0, health: MAX_HEALTH, vx: 0, vy: 0 }
+        { x: -60, y: 0, health: MAX_HEALTH, vx: 0, vy: 0, fuel: MAX_FUEL },
+        { x: 60, y: 0, health: MAX_HEALTH, vx: 0, vy: 0, fuel: MAX_FUEL }
       ];
       return {
         width: FIELD_X_MAX * 2,
