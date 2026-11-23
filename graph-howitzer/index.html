@@ -39,9 +39,10 @@
     const INTERACT_KEY_P2 = "Enter";
     // Shift+B opens the hidden battlefield viewer. Nothing in the room mentions it.
     const SECRET_VIEW_KEY = "KeyB";
+    // 1 battlefield unit = 1 meter.
     const FIELD_X_MAX = 120; // x runs from -120 to 120
     const FIELD_Y_MAX = 100; // y runs from -100 to 100, and up is positive
-    const PLAYER_SIZE = 6; // diameter 6 units, so the radius is 3
+    const PLAYER_SIZE = 6; // diameter 6 meters, so the radius is 3
     const BATTLEFIELD_STORAGE_KEY = "graphHowitzerBattlefield";
     const BATTLEFIELD_CHANNEL_NAME = "graph-howitzer";
     const ZOOM_WIDTH_RATIO = 0.85;
@@ -88,8 +89,9 @@
     const MAX_HEALTH = 100;
     const PING_WARNING_ENEMY = "> WARNING: Enemy signal detected!";
     const PING_WARNING_OBSTACLE = "> WARNING: Movement near obstacle detected!";
-    // Battlefield units. The square shows everything within 20 units around this player.
-    // The square's half-size maps to 20 units.
+    const PING_WARNING_SELF = "> WARNING: Obstacle too close!";
+    // The square shows everything within 20 meters around this player.
+    // The square's half-size maps to 20 meters.
     const RADAR_RANGE = 20;
     const RADAR_SWEEP_SECONDS = 3; // one full turn of the sweep line
     const RADAR_TRAIL_STEPS = 8;
@@ -113,6 +115,8 @@
     const OBSTACLE_PLACE_TRIES = 8;
     // How close an opponent must be to an obstacle edge to light the red ping.
     const OBSTACLE_NEAR_DISTANCE = 3;
+    // Meters from your own machine's edge to an obstacle's edge.
+    const SELF_OBSTACLE_WARN_DISTANCE = 4;
     const RED_PING_SIZE = 12; // capped at the bezel thickness so it sits in the frame corner
     const RED_PING_BLINK_SECONDS = 0.4;
     const COLOR_RED_PING_OFF = "#3a1518";
@@ -126,10 +130,10 @@
     // Held keys push the knob out at a steady speed. Letting go springs it back faster.
     const STICK_FULL_SECONDS = 0.8; // center to full tilt
     const STICK_RETURN_SECONDS = 0.5; // full tilt back to center
-    const MAX_MOVE_SPEED = 8; // battlefield units per second at full tilt
-    const ACCELERATION = 3; // units per second squared; about 2.5 seconds from a stop to full speed
-    const DECELERATION = 5; // units per second squared; slows down a bit faster than it speeds up
-    const MOVE_STATUS_SPEED = 0.2; // slower than this, the activity returns to Idle
+    const MAX_MOVE_SPEED = 8; // m/s at full tilt
+    const ACCELERATION = 3; // m/s squared; about 2.5 seconds from a stop to full speed
+    const DECELERATION = 5; // m/s squared; slows down a bit faster than it speeds up
+    const MOVE_STATUS_SPEED = 0.2; // m/s; slower than this, the activity returns to Idle
     const STATE_PUBLISH_SECONDS = 0.1; // tell the viewer about 10 times a second
     // Gray and dark metal, like the rest of the console. Sizes below are fractions of the plate.
     const COLOR_JOYSTICK_PLATE = "#3a3a42";
@@ -665,9 +669,7 @@
       const rect = getMonitorRect(room);
       const near = stationNearHand(player, room) === "monitor";
       const bezel = Math.min(MONITOR_BEZEL, rect.width / 4, rect.height / 4);
-
-      ctx.fillStyle = COLOR_MONITOR_FRAME;
-      ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+      drawConsoleFrame(rect, { label: "STATUS", powerOn: machineStarted });
 
       const screenX = rect.x + bezel;
       const screenY = rect.y + bezel;
@@ -689,9 +691,13 @@
       const rect = getRadarRect(room);
       const bezel = Math.min(MONITOR_BEZEL, rect.width / 4, rect.height / 4);
       const near = stationNearHand(player, room) === "radar";
-
-      ctx.fillStyle = COLOR_MONITOR_FRAME;
-      ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+      // The bottom-right screw is left off so the red ping keeps that corner.
+      drawConsoleFrame(rect, {
+        label: "RADAR",
+        powerOn: machineStarted,
+        skipCorners: ["br"],
+        reserveRight: RED_PING_SIZE
+      });
 
       const screenX = rect.x + bezel;
       const screenY = rect.y + bezel;
@@ -704,25 +710,123 @@
     }
 
     // Metal plate. The light edge is the top and left; the dark edge is the bottom and right.
-    function drawBeveledPlate(rect) {
+    function drawBeveledRect(rect) {
       const x = rect.x;
       const y = rect.y;
-      const s = rect.width;
-      const bevel = Math.max(3, s * 0.04);
+      const w = rect.width;
+      const h = rect.height;
+      const bevel = Math.max(3, Math.min(w, h) * 0.04);
       ctx.fillStyle = COLOR_JOYSTICK_EDGE_LIGHT;
-      ctx.fillRect(x, y, s, s);
+      ctx.fillRect(x, y, w, h);
       ctx.fillStyle = COLOR_JOYSTICK_EDGE_DARK;
       ctx.beginPath();
-      ctx.moveTo(x + s, y);
-      ctx.lineTo(x + s, y + s);
-      ctx.lineTo(x, y + s);
-      ctx.lineTo(x + bevel, y + s - bevel);
-      ctx.lineTo(x + s - bevel, y + s - bevel);
-      ctx.lineTo(x + s - bevel, y + bevel);
+      ctx.moveTo(x + w, y);
+      ctx.lineTo(x + w, y + h);
+      ctx.lineTo(x, y + h);
+      ctx.lineTo(x + bevel, y + h - bevel);
+      ctx.lineTo(x + w - bevel, y + h - bevel);
+      ctx.lineTo(x + w - bevel, y + bevel);
       ctx.closePath();
       ctx.fill();
       ctx.fillStyle = COLOR_JOYSTICK_PLATE;
-      ctx.fillRect(x + bevel, y + bevel, s - bevel * 2, s - bevel * 2);
+      ctx.fillRect(x + bevel, y + bevel, w - bevel * 2, h - bevel * 2);
+    }
+
+    function drawBeveledPlate(rect) {
+      drawBeveledRect(rect);
+    }
+
+    function drawFrameVents(rect, bezel) {
+      const x = rect.x + bezel * 0.2;
+      const w = bezel * 0.48;
+      const top = rect.y + bezel * 1.8;
+      const bottom = rect.y + rect.height - bezel * 1.8;
+      if (bottom - top < 10 || w < 2) return;
+      ctx.strokeStyle = COLOR_JOYSTICK_EDGE_DARK;
+      ctx.lineWidth = 1;
+      const count = 4;
+      for (let i = 0; i < count; i++) {
+        const y = top + (bottom - top) * (i + 0.5) / count;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + w, y);
+        ctx.stroke();
+      }
+    }
+
+    function drawFrameKnob(rect, bezel) {
+      const r = Math.max(2, bezel * 0.26);
+      const x = rect.x + rect.width - bezel * 0.5;
+      const y = rect.y + rect.height * 0.42;
+      ctx.fillStyle = COLOR_JOYSTICK_EDGE_DARK;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COLOR_JOYSTICK_BOLT;
+      ctx.beginPath();
+      ctx.arc(x, y, r * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Small name plate in the bottom bezel. Returns its box, or null if it will not fit.
+    function drawFramePlate(rect, text, bezel, reserveRight) {
+      const h = Math.min(10, bezel - 2);
+      if (h < 7) return null;
+      const fontSize = Math.max(8, Math.floor(h - 1));
+      ctx.font = fontSize + "px sans-serif";
+      const w = ctx.measureText(text).width + 10;
+      const rightLimit = rect.x + rect.width - reserveRight - 4;
+      const leftLimit = rect.x + bezel;
+      const x = rect.x + (rect.width - reserveRight - w) / 2;
+      if (x < leftLimit || x + w > rightLimit) return null;
+      const y = rect.y + rect.height - bezel + (bezel - h) / 2;
+      ctx.fillStyle = COLOR_JOYSTICK_LABEL;
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = COLOR_JOYSTICK_EDGE_LIGHT;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+      ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(text, x + w / 2, y + h / 2);
+      return { x: x, y: y, w: w, h: h };
+    }
+
+    function drawPowerLed(label, rect, reserveRight, powerOn) {
+      const r = Math.max(2, label.h * 0.26);
+      const x = label.x + label.w + r + 3;
+      const y = label.y + label.h / 2;
+      if (x + r > rect.x + rect.width - reserveRight - 2) return;
+      ctx.fillStyle = powerOn ? COLOR_JOYSTICK_LED_ON : COLOR_JOYSTICK_LED_OFF;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Bezel details only. The screen is drawn later, at the same size as before.
+    function drawConsoleFrame(rect, spec) {
+      const bezel = Math.min(MONITOR_BEZEL, rect.width / 4, rect.height / 4);
+      const skip = spec.skipCorners || [];
+      const reserveRight = spec.reserveRight || 0;
+      ctx.save();
+      drawBeveledRect(rect);
+      const boltR = Math.max(2, Math.min(3.5, bezel * 0.28));
+      const inset = Math.max(boltR + 1, bezel * 0.48);
+      const corners = [
+        ["tl", rect.x + inset, rect.y + inset],
+        ["tr", rect.x + rect.width - inset, rect.y + inset],
+        ["bl", rect.x + inset, rect.y + rect.height - inset],
+        ["br", rect.x + rect.width - inset, rect.y + rect.height - inset]
+      ];
+      for (let i = 0; i < corners.length; i++) {
+        if (skip.indexOf(corners[i][0]) !== -1) continue;
+        drawBolt(corners[i][1], corners[i][2], boltR);
+      }
+      drawFrameVents(rect, bezel);
+      drawFrameKnob(rect, bezel);
+      const label = drawFramePlate(rect, spec.label, bezel, reserveRight);
+      if (label) drawPowerLed(label, rect, reserveRight, spec.powerOn);
+      ctx.restore();
     }
 
     function drawBolt(x, y, r) {
@@ -954,6 +1058,34 @@
       return collidesWithObstacle(enemy.x, enemy.y, OBSTACLE_NEAR_DISTANCE);
     }
 
+    // Meters from the machine's edge to the obstacle's edge. Negative when they overlap.
+    function machineEdgeGap(obstacle, you) {
+      const radius = PLAYER_SIZE / 2;
+      if (obstacle.type === "tower") {
+        return Math.hypot(obstacle.x - you.x, obstacle.y - you.y) - obstacle.r - radius;
+      }
+      const left = obstacle.x - obstacle.w / 2;
+      const right = obstacle.x + obstacle.w / 2;
+      const top = obstacle.y - obstacle.h / 2;
+      const bottom = obstacle.y + obstacle.h / 2;
+      const nearestX = Math.max(left, Math.min(you.x, right));
+      const nearestY = Math.max(top, Math.min(you.y, bottom));
+      const outside = Math.hypot(nearestX - you.x, nearestY - you.y);
+      if (outside > 0) return outside - radius;
+      const inside = Math.min(you.x - left, right - you.x, you.y - top, bottom - you.y);
+      return -(inside + radius);
+    }
+
+    function selfTooCloseToObstacle(ownerIndex) {
+      if (!machineStarted) return false;
+      const you = battlefield.players[ownerIndex];
+      const obstacles = battlefield.obstacles || [];
+      for (let i = 0; i < obstacles.length; i++) {
+        if (machineEdgeGap(obstacles[i], you) <= SELF_OBSTACLE_WARN_DISTANCE) return true;
+      }
+      return false;
+    }
+
     // "" when the ping is off. "enemy" or "obstacle" says why it is on.
     function redPingReason(ownerIndex) {
       if (enemyInRadarRange(ownerIndex)) return "enemy";
@@ -992,6 +1124,7 @@
       for (let i = 0; i < players.length; i++) {
         setWarningLine(players[i], "enemy", PING_WARNING_ENEMY, enemyInRadarRange(i));
         setWarningLine(players[i], "obstacle", PING_WARNING_OBSTACLE, enemyNearObstacle(i));
+        setWarningLine(players[i], "self", PING_WARNING_SELF, selfTooCloseToObstacle(i));
       }
     }
 
@@ -1177,17 +1310,37 @@
       return best;
     }
 
+    function metersText(distance) {
+      return distance.toFixed(1) + " m";
+    }
+
     function radarInfoLines(ownerIndex) {
       const you = battlefield.players[ownerIndex];
       const enemy = battlefield.players[1 - ownerIndex];
       const enemyDist = Math.hypot(enemy.x - you.x, enemy.y - you.y);
       const lines = [];
-      if (enemyDist <= RADAR_RANGE) lines.push("Enemy distance: " + enemyDist.toFixed(1));
-      else lines.push("Enemy: no contact");
+      if (enemyDist <= RADAR_RANGE) {
+        lines.push([{ text: "Enemy distance: " + metersText(enemyDist), color: COLOR_MONITOR_TEXT }]);
+      } else {
+        lines.push([{ text: "Enemy: no contact", color: COLOR_MONITOR_TEXT }]);
+      }
       const obstacleDist = nearestObstacleDistance(you);
-      if (obstacleDist >= 0) lines.push("Nearest obstacle: " + obstacleDist.toFixed(1));
-      else lines.push("Obstacles: none in range");
+      if (obstacleDist >= 0) {
+        const parts = [{ text: "Nearest obstacle: " + metersText(obstacleDist), color: COLOR_MONITOR_TEXT }];
+        if (selfTooCloseToObstacle(ownerIndex)) {
+          parts.push({ text: "  TOO CLOSE", color: COLOR_MONITOR_WARNING });
+        }
+        lines.push(parts);
+      } else {
+        lines.push([{ text: "Obstacles: none in range", color: COLOR_MONITOR_TEXT }]);
+      }
       return lines;
+    }
+
+    function lineWidthOf(parts) {
+      let width = 0;
+      for (let i = 0; i < parts.length; i++) width += ctx.measureText(parts[i].text).width;
+      return width;
     }
 
     function drawRadarReadout(ownerIndex, x, y, maxWidth) {
@@ -1195,43 +1348,38 @@
       let fontSize = 22;
       ctx.font = fontSize + "px monospace";
       let widest = 0;
-      for (let i = 0; i < lines.length; i++) {
-        widest = Math.max(widest, ctx.measureText(lines[i]).width);
-      }
+      for (let i = 0; i < lines.length; i++) widest = Math.max(widest, lineWidthOf(lines[i]));
       if (widest > maxWidth && maxWidth > 40) {
         fontSize = Math.max(14, Math.floor(fontSize * (maxWidth / widest)));
         ctx.font = fontSize + "px monospace";
       }
-      ctx.fillStyle = COLOR_MONITOR_TEXT;
       ctx.textAlign = "left";
       ctx.textBaseline = "top";
       const lineHeight = fontSize + 10;
       for (let i = 0; i < lines.length; i++) {
-        ctx.fillText(lines[i], x, y + i * lineHeight);
+        let cursor = x;
+        const parts = lines[i];
+        for (let p = 0; p < parts.length; p++) {
+          ctx.fillStyle = parts[p].color;
+          ctx.fillText(parts[p].text, cursor, y + i * lineHeight);
+          cursor += ctx.measureText(parts[p].text).width;
+        }
       }
     }
 
-    // Big square in the top-left. The green readout uses whatever space is left.
+    // Big square at the top center. The readout sits underneath it.
     function drawBigRadar(player, screenX, screenY, screenW, screenH) {
-      const gap = 18;
-      const readoutBand = 72;
-      const sideBand = 240;
-      const sizeBeside = Math.min(screenH - 4, screenW - sideBand - gap);
-      const sizeAbove = Math.min(screenW - 4, screenH - readoutBand - gap);
-      let size = sizeAbove;
-      let readoutOnRight = false;
-      if (sizeBeside >= sizeAbove && sizeBeside >= 80) {
-        size = sizeBeside;
-        readoutOnRight = true;
-      }
-      if (size < 48) size = Math.min(screenW, screenH);
+      const gap = 16;
+      const readoutBand = 80;
+      let size = Math.min(screenW - 8, screenH - readoutBand - gap);
+      if (size < 48) size = Math.min(screenW - 4, screenH - 4);
+      const squareX = screenX + (screenW - size) / 2;
+      const squareY = screenY;
       const ownerIndex = player === player1 ? 0 : 1;
-      drawRadarPicture(screenX, screenY, size, size, ownerIndex, true);
-      if (readoutOnRight) {
-        drawRadarReadout(ownerIndex, screenX + size + gap, screenY + 28, screenW - size - gap);
-      } else {
-        drawRadarReadout(ownerIndex, screenX + 4, screenY + size + gap, screenW - 8);
-      }
+      drawRadarPicture(squareX, squareY, size, size, ownerIndex, true);
+      const textX = squareX;
+      const textW = Math.max(40, screenX + screenW - textX - 4);
+      drawRadarReadout(ownerIndex, textX, squareY + size + gap, textW);
     }
 
     function messageText(entry) {
@@ -1384,8 +1532,12 @@
 
       const panel = getZoomRect(room);
       const bezel = Math.min(MONITOR_BEZEL, panel.width / 6, panel.height / 6);
-      ctx.fillStyle = COLOR_MONITOR_FRAME;
-      ctx.fillRect(panel.x, panel.y, panel.width, panel.height);
+      // The close button owns the top-right corner, so that screw is left off.
+      drawConsoleFrame(panel, {
+        label: player.panelKind === "radar" ? "RADAR" : "STATUS",
+        powerOn: machineStarted,
+        skipCorners: ["tr"]
+      });
 
       const screenX = panel.x + bezel;
       const screenY = panel.y + bezel + 8;
