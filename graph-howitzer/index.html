@@ -19,6 +19,8 @@
     const COUNTDOWN_SECONDS = 10;
     // Both players hold the shared button this long before the countdown can start.
     const HOLD_TO_START_SECONDS = 2;
+    // The shared start button is kept, but turned off until it is needed again.
+    const ENABLE_HOLD_TO_START = false;
     const START_DRAIN_SECONDS = 0.5; // the ring empties this fast if either player lets go
     const START_FADE_SECONDS = 0.45; // the button fades away once the hold is finished
     const START_BUTTON_RADIUS = 36; // reaches into both rooms; the wall still blocks the hands
@@ -168,6 +170,8 @@
     const FIRE_SAMPLE_STEP = 0.5;
     const FIRE_EQUATION_MAX = 48;
     const FIRE_DEFAULT_EQUATION = "-0.05x^2 + 2x";
+    const SHELL_SPEED = 20; // m/s along the path, not along the ground
+    const SHELL_INTEGRATION_STEP = 0.05; // horizontal step used to measure the arc
     const FIRE_KEY_COLS = 5;
     const FIRE_KEYS = [
       "7", "8", "9", "+", "sin",
@@ -618,8 +622,6 @@
       // Zoom panels sit above the room, one per player.
       drawZoomPanel(rooms.left, player1);
       drawZoomPanel(rooms.right, player2);
-      drawFireKeypad(rooms.left, player1);
-      drawFireKeypad(rooms.right, player2);
     }
 
     let lastTime = 0;
@@ -1365,6 +1367,8 @@
       const key = FIRE_KEYS[player.fireIndex];
       if (key === "DONE") {
         player.fireOpen = false;
+        player.panelOpen = false;
+        player.panelKind = "";
         return;
       }
       if (key === "CLR") {
@@ -1574,6 +1578,58 @@
       if (player.equationParsedFor === player.equation) return;
       player.equationParsedFor = player.equation;
       player.equationTree = parseExpression(player.equation);
+      player.flight = player.equationTree ? shellFlight(player.equationTree) : null;
+    }
+
+    // First return to the ground after takeoff. Time is the arc length divided by shell speed.
+    function shellFlight(tree) {
+      const step = SHELL_INTEGRATION_STEP;
+      let prevX = 0;
+      let prevY = evalExpr(tree, 0);
+      if (!isFinite(prevY)) return null;
+      let arc = 0;
+      let peak = prevY;
+      let peakX = 0;
+      let leftGround = prevY > 0.02;
+      const steps = Math.round(FIRE_GRAPH_X_MAX / step);
+      for (let i = 1; i <= steps; i++) {
+        const x = i * step;
+        const y = evalExpr(tree, x);
+        if (!isFinite(y)) return null;
+        const seg = Math.hypot(x - prevX, y - prevY);
+        if (y > peak) {
+          peak = y;
+          peakX = x;
+        }
+        if (y > 0.02) leftGround = true;
+        if (leftGround && x > 0 && y <= 0) {
+          const drop = prevY - y;
+          const t = drop === 0 ? 1 : prevY / drop;
+          const mix = t < 0 ? 0 : (t > 1 ? 1 : t);
+          return {
+            impact: true,
+            distance: prevX + (x - prevX) * mix,
+            peak: peak,
+            peakX: peakX,
+            time: (arc + seg * mix) / SHELL_SPEED
+          };
+        }
+        arc += seg;
+        prevX = x;
+        prevY = y;
+      }
+      return { impact: false, peak: peak, peakX: peakX };
+    }
+
+    function impactLines(player) {
+      if (!player.equationTree || !player.flight) return ["Syntax error"];
+      if (!player.flight.impact) return ["No impact within range"];
+      const flight = player.flight;
+      return [
+        "Impact distance: " + flight.distance.toFixed(1) + " m",
+        "Peak height: " + flight.peak.toFixed(1) + " m",
+        "Flight time: " + flight.time.toFixed(1) + " s"
+      ];
     }
 
     // Samples from x = 0 until the shell comes back to the ground, or the axis ends.
@@ -1604,7 +1660,7 @@
       return step * pow;
     }
 
-    function drawShellGraph(screen, tree) {
+    function drawShellGraph(screen, tree, flight) {
       ctx.save();
       ctx.beginPath();
       ctx.rect(screen.x, screen.y, screen.w, screen.h);
@@ -1627,6 +1683,7 @@
         if (points[i].y < yMin) yMin = points[i].y;
         if (points[i].y > yMax) yMax = points[i].y;
       }
+      if (flight && flight.peak > yMax) yMax = flight.peak;
       if (yMax - yMin < 1) yMax = yMin + 10;
       const pad = (yMax - yMin) * 0.08;
       yMin -= pad;
@@ -1679,6 +1736,25 @@
         }
         ctx.stroke();
       }
+      if (flight && isFinite(flight.peak)) {
+        ctx.fillStyle = COLOR_RADAR_YOU;
+        ctx.beginPath();
+        ctx.arc(px(flight.peakX), py(flight.peak), 3.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      if (flight && flight.impact) {
+        const markX = px(flight.distance);
+        const markY = py(0);
+        const arm = 5;
+        ctx.strokeStyle = "#ffb020";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(markX - arm, markY - arm);
+        ctx.lineTo(markX + arm, markY + arm);
+        ctx.moveTo(markX + arm, markY - arm);
+        ctx.lineTo(markX - arm, markY + arm);
+        ctx.stroke();
+      }
       ctx.restore();
     }
 
@@ -1711,68 +1787,73 @@
       const innerX = rect.x + 12;
       const innerY = rect.y + 12;
       const innerW = rect.width - 24;
-      const eqH = Math.max(36, Math.min(48, rect.height * 0.2));
+      const eqH = Math.max(28, Math.min(36, rect.height * 0.16));
+      const noteH = 16;
+      const graphY = innerY + eqH + noteH + 8;
+      const graphH = rect.y + rect.height - 30 - graphY;
+      // Dark glass until H.O.W.L.E.R has finished booting. No equation and no graph yet.
+      if (!machineStarted) {
+        ctx.fillStyle = "#000000";
+        ctx.fillRect(innerX, innerY, innerW, Math.max(8, rect.y + rect.height - 28 - innerY));
+        ctx.restore();
+        return;
+      }
       ctx.fillStyle = "#000000";
       ctx.fillRect(innerX, innerY, innerW, eqH);
+      ctx.save();
       ctx.beginPath();
       ctx.rect(innerX, innerY, innerW, eqH);
       ctx.clip();
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
       if (player.equationTree) {
-        ctx.font = "13px monospace";
+        ctx.font = "12px monospace";
         ctx.fillStyle = COLOR_MONITOR_TEXT;
         ctx.fillText("y = " + player.equation, innerX + 6, innerY + eqH / 2);
       } else {
-        ctx.font = "13px monospace";
+        ctx.font = "12px monospace";
         ctx.fillStyle = COLOR_MONITOR_WARNING;
-        ctx.fillText("Syntax error", innerX + 6, innerY + eqH * 0.32);
-        ctx.font = "11px monospace";
-        ctx.fillStyle = "#6d8a74";
-        ctx.fillText("y = " + player.equation, innerX + 6, innerY + eqH * 0.72);
+        ctx.fillText("Syntax error", innerX + 6, innerY + eqH / 2);
       }
       ctx.restore();
+      const note = impactLines(player);
+      ctx.font = "10px monospace";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = player.equationTree && player.flight && player.flight.impact ? COLOR_MONITOR_TEXT : COLOR_MONITOR_WARNING;
+      const brief = note.length === 3
+        ? note[0].replace("Impact distance: ", "") + " · " + note[1].replace("Peak height: ", "") + " · " + note[2].replace("Flight time: ", "")
+        : note[0];
+      ctx.fillText(brief, innerX + 4, innerY + eqH + noteH / 2 + 2);
 
-      const graphY = innerY + eqH + 8;
-      const graphH = rect.y + rect.height - 30 - graphY;
       if (graphH > 20 && innerW > 20) {
         drawShellGraph(
           { x: innerX, y: graphY, w: innerW, h: graphH },
-          player.equationTree
+          player.equationTree,
+          player.flight
         );
       }
+      ctx.restore();
       if (near && machineStarted) drawInteractOutline(rect);
     }
 
-    // Keypad for the player whose hand is locked on fire control. Direction keys move the box.
-    function drawFireKeypad(room, player) {
-      if (!machineStarted || !player.fireOpen) return;
-      const fire = getFireRect(room);
-      const gap = (room.right - room.left) * STATION_GAP_RATIO;
-      let x = room.left + gap;
-      let y = fire.y + fire.height + gap;
-      let width = room.right - gap - x;
-      let height = canvas.height - gap - y;
-      if (height < 120) {
-        y = fire.y;
-        height = fire.height;
-        width = Math.max(80, fire.x - gap - x);
-      }
-      const rect = { x: x, y: y, width: width, height: height };
+    // The right half of the fire zoom window. Same keys as the old floor overlay.
+    function drawFireKeys(rect, player) {
       ctx.save();
-      drawBeveledRect(rect);
+      ctx.fillStyle = COLOR_JOYSTICK_WELL;
+      ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
       ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
-      ctx.font = "bold 11px sans-serif";
+      ctx.font = "bold 12px sans-serif";
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
-      ctx.fillText("KEYPAD", rect.x + 12, rect.y + 16);
+      ctx.fillText("KEYPAD", rect.x + 8, rect.y + 14);
 
       const cols = FIRE_KEY_COLS;
       const rows = Math.ceil(FIRE_KEYS.length / cols);
-      const gridX = rect.x + 10;
-      const gridY = rect.y + 30;
-      const gridW = rect.width - 20;
-      const gridH = rect.height - 42;
+      const gridX = rect.x + 8;
+      const gridY = rect.y + 28;
+      const gridW = rect.width - 16;
+      const gridH = rect.height - 38;
       const cellW = gridW / cols;
       const cellH = gridH / rows;
       for (let i = 0; i < FIRE_KEYS.length; i++) {
@@ -1781,7 +1862,7 @@
         const cx = gridX + col * cellW;
         const cy = gridY + row * cellH;
         const selected = i === player.fireIndex;
-        ctx.fillStyle = selected ? "#1c3a28" : COLOR_JOYSTICK_WELL;
+        ctx.fillStyle = selected ? "#1c3a28" : "#101014";
         ctx.fillRect(cx + 2, cy + 2, cellW - 4, cellH - 4);
         if (selected) {
           ctx.strokeStyle = COLOR_MONITOR_TEXT;
@@ -1789,12 +1870,61 @@
           ctx.strokeRect(cx + 2, cy + 2, cellW - 4, cellH - 4);
         }
         ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
-        ctx.font = "bold 13px sans-serif";
+        ctx.font = "bold 14px sans-serif";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.fillText(FIRE_KEYS[i], cx + cellW / 2, cy + cellH / 2);
       }
       ctx.restore();
+    }
+
+    // Left side is the shell graph. Right side is the keypad. Same frame as the monitor zoom.
+    function drawFireZoom(player, screenX, screenY, screenW, screenH) {
+      syncEquation(player);
+      const gap = 10;
+      const leftW = Math.floor((screenW - gap) * 0.62);
+      const rightX = screenX + leftW + gap;
+      const rightW = screenW - leftW - gap;
+      const eqH = 34;
+      const infoH = 78;
+      ctx.fillStyle = "#000000";
+      ctx.fillRect(screenX, screenY, leftW, eqH);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(screenX, screenY, leftW, eqH);
+      ctx.clip();
+      ctx.font = "16px monospace";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      if (player.equationTree) {
+        ctx.fillStyle = COLOR_MONITOR_TEXT;
+        ctx.fillText("y = " + player.equation, screenX + 8, screenY + eqH / 2);
+      } else {
+        ctx.fillStyle = COLOR_MONITOR_WARNING;
+        ctx.fillText("Syntax error", screenX + 8, screenY + eqH / 2);
+      }
+      ctx.restore();
+
+      const graphY = screenY + eqH + 8;
+      const graphH = screenH - eqH - infoH - 16;
+      if (graphH > 24) {
+        drawShellGraph(
+          { x: screenX, y: graphY, w: leftW, h: graphH },
+          player.equationTree,
+          player.flight
+        );
+      }
+
+      const lines = impactLines(player);
+      const infoY = screenY + screenH - infoH;
+      ctx.font = "15px monospace";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      ctx.fillStyle = lines.length === 3 ? COLOR_MONITOR_TEXT : COLOR_MONITOR_WARNING;
+      for (let i = 0; i < lines.length; i++) {
+        ctx.fillText(lines[i], screenX + 4, infoY + i * 24);
+      }
+      drawFireKeys({ x: rightX, y: screenY, width: rightW, height: screenH }, player);
     }
 
     // Soft pulse around the station the hand can use. The station itself does not brighten.
@@ -1978,13 +2108,25 @@
       ctx.stroke();
     }
 
-    // Faint ring at exactly RADAR_RANGE, same green as the crosshair.
-    function drawRadarRangeCircle(centerX, centerY, radius) {
-      ctx.strokeStyle = COLOR_RADAR_CROSS;
+    // Rings at 5, 10, 15, and 20 m. The outer ring is the radar's range circle.
+    function drawRadarRangeRings(centerX, centerY, rangePx) {
+      const marks = [5, 10, 15, 20];
+      const fontSize = rangePx > 90 ? 11 : 8;
+      ctx.font = fontSize + "px monospace";
+      ctx.textBaseline = "bottom";
       ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
-      ctx.stroke();
+      for (let i = 0; i < marks.length; i++) {
+        const meters = marks[i];
+        const radius = rangePx * (meters / RADAR_RANGE);
+        ctx.strokeStyle = meters === RADAR_RANGE ? COLOR_RADAR_CROSS : "rgba(57, 255, 106, 0.18)";
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = COLOR_RADAR_YOU;
+        ctx.textAlign = meters === RADAR_RANGE ? "right" : "center";
+        const labelX = meters === RADAR_RANGE ? centerX + radius - 2 : centerX + radius;
+        ctx.fillText(meters + " m", labelX, centerY - 1);
+      }
     }
 
     function drawRadarCrosshair(screenX, screenY, screenW, screenH, centerX, centerY) {
@@ -2082,7 +2224,7 @@
       if (!showBlips) drawRadarCrosshair(screenX, screenY, screenW, screenH, centerX, centerY);
       if (showBlips) drawRadarBlips(centerX, centerY, rangePx, ownerIndex);
       drawRadarSweep(centerX, centerY, rangePx);
-      drawRadarRangeCircle(centerX, centerY, rangePx);
+      drawRadarRangeRings(centerX, centerY, rangePx);
 
       ctx.fillStyle = COLOR_RADAR_YOU;
       ctx.beginPath();
@@ -2356,6 +2498,8 @@
       if (kind === "fire") {
         player.fireOpen = true;
         player.fireIndex = 0;
+        player.panelOpen = true;
+        player.panelKind = "fire";
         placeHandOnFire(player, room);
         return;
       }
@@ -2372,8 +2516,11 @@
       const panel = getZoomRect(room);
       const bezel = Math.min(MONITOR_BEZEL, panel.width / 6, panel.height / 6);
       // The close button owns the top-right corner, so that screw is left off.
+      let frameLabel = "STATUS";
+      if (player.panelKind === "radar") frameLabel = "RADAR";
+      if (player.panelKind === "fire") frameLabel = "FIRE";
       drawConsoleFrame(panel, {
-        label: player.panelKind === "radar" ? "RADAR" : "STATUS",
+        label: frameLabel,
         powerOn: machineStarted,
         skipCorners: ["tr"]
       });
@@ -2386,6 +2533,8 @@
       ctx.fillRect(screenX, screenY, screenW, screenH);
       if (player.panelKind === "radar") {
         drawBigRadar(player, screenX, screenY, screenW, screenH);
+      } else if (player.panelKind === "fire") {
+        drawFireZoom(player, screenX, screenY, screenW, screenH);
       } else {
         drawMessageList(player, screenX, screenY, screenW, screenH, ZOOM_FONT_SIZE, ZOOM_LINE_HEIGHT);
       }
@@ -2431,7 +2580,13 @@
       const panel = getZoomRect(room);
       const onClose = pointInRect(x, y, closeButtonRect(panel));
       const insidePanel = pointInRect(x, y, panel);
-      if (onClose || !insidePanel) player.panelOpen = false;
+      if (onClose || !insidePanel) {
+        player.panelOpen = false;
+        if (player.panelKind === "fire") {
+          player.fireOpen = false;
+          player.panelKind = "";
+        }
+      }
     }
 
     canvas.addEventListener("click", function (event) {
@@ -2450,9 +2605,10 @@
       return "> Boot sequence: " + MACHINE_NAME + " online in " + secondsLeft + "s";
     }
 
+    const openingLine = ENABLE_HOLD_TO_START ? WAITING_TEXT : countdownText(COUNTDOWN_SECONDS);
     const countdownLines = [
-      { text: WAITING_TEXT },
-      { text: WAITING_TEXT }
+      { text: openingLine },
+      { text: openingLine }
     ];
     player1.messages.push(countdownLines[0]);
     player2.messages.push(countdownLines[1]);
@@ -2461,7 +2617,7 @@
     let countdownSecondsLeft = COUNTDOWN_SECONDS;
     let machineStarted = false;
     let machineStartedAt = -1;
-    let startupBegun = false;
+    let startupBegun = !ENABLE_HOLD_TO_START;
     let startProgress = 0;
     let startFade = 1;
 
@@ -2487,6 +2643,7 @@
     }
 
     function isHoldingStart(player) {
+      if (!ENABLE_HOLD_TO_START) return false;
       if (startupBegun) return false;
       const key = player === player1 ? INTERACT_KEY_P1 : INTERACT_KEY_P2;
       if (!keys[key]) return false;
@@ -2505,6 +2662,7 @@
 
     // Both hands and both interact keys have to stay down together.
     function updateStartHold(dt, time) {
+      if (!ENABLE_HOLD_TO_START) return;
       if (startupBegun) {
         player1.holdingStart = false;
         player2.holdingStart = false;
@@ -2540,6 +2698,7 @@
     }
 
     function drawStartButton() {
+      if (!ENABLE_HOLD_TO_START) return;
       if (startupBegun && startFade <= 0) return;
       const button = getStartButton();
       const inner = button.r - START_RING_WIDTH;
@@ -2619,7 +2778,7 @@
     }
 
     // Uses the animation timestamp so the ticks stay one second apart.
-    // The clock stays off until both players finish the hold.
+    // With the hold button off, the countdown starts on the first frame.
     function updateCountdown(time) {
       if (!startupBegun) return;
       if (countdownSecondsLeft === 0) return;
