@@ -45,12 +45,37 @@
     const HOLD_FINGER_RADIUS_RATIO = 0.7;
     const HOLD_FINGER_PULL = 0.8;
     // Pointing pose, used only while that player's zoom window is open.
-    const POINT_GLIDE_SECONDS = 0.1; // fingertip eases onto the next keypad key
+    // Classic pixel link-hand. 0 empty, 1 black outline, 2 white, 3 the player's cuff.
+    // The hotspot is the tip of the index finger.
     const POINT_PRESS_DOWN_SECONDS = 0.12;
     const POINT_PRESS_UP_SECONDS = 0.12;
-    const POINT_PRESS_SCALE = 0.86; // the hand shrinks a little as the finger touches down
+    const POINT_PRESS_SCALE = 0.86; // one cell smaller at the bottom of the tap, so pixels stay crisp
     const POINT_PRESS_SHIFT = 5; // pixels the hand drops during the press
-    const POINT_INDEX_REACH = PALM_RADIUS * 1.68; // palm center to the index fingertip center
+    const POINT_HAND_CELL = 3;
+    const POINT_HOT_COL = 5;
+    const POINT_HOT_ROW = 0;
+    const POINT_HAND_BITMAP = [
+      "0000010000000000",
+      "0000121000000000",
+      "0000121000000000",
+      "0000121000000000",
+      "0000121000000000",
+      "0000121000000000",
+      "0000121110000000",
+      "0000121210000000",
+      "0000121211100000",
+      "0000121212100000",
+      "0111121212111000",
+      "1211121212121000",
+      "1221121212121000",
+      "0122222222221000",
+      "0122222222221000",
+      "0012222222221000",
+      "0001222222210000",
+      "0000122222100000",
+      "0000133333100000",
+      "0000011111000000"
+    ];
     const INTERACT_KEY_P1 = "e";
     const INTERACT_KEY_P2 = "Enter";
     // Shift+B opens the hidden battlefield viewer. Nothing in the room mentions it.
@@ -285,10 +310,8 @@
       const name = keyName(event);
       const alreadyDown = keys[name] === true;
       keys[name] = true;
-      // Key repeat would open and close the panel over and over, and would race the keypad cursor.
+      // Key repeat would open and close a station over and over.
       if (alreadyDown) return;
-      nudgeFireCursor(player1, name, "a", "d", "w", "s");
-      nudgeFireCursor(player2, name, "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown");
       // Holding the start button uses the same keys, but it is not a station press.
       if (name === INTERACT_KEY_P1) tryInteract(player1, getRooms().left);
       if (name === INTERACT_KEY_P2) tryInteract(player2, getRooms().right);
@@ -545,20 +568,16 @@
     function update(dt) {
       releaseLockedStations();
       const rooms = getRooms();
-      // A zoom panel freezes that hand. A gripped joystick pins it to the knob.
-      // Fire control pins it to that station while the keypad is open.
-      if (!player1.panelOpen && !player1.gripping && !player1.fireOpen) moveHand(player1, direction("w", "s", "a", "d"), dt, rooms.left);
-      if (!player2.panelOpen && !player2.gripping && !player2.fireOpen) moveHand(player2, direction("ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"), dt, rooms.right);
+      // An open window lets that hand roam. A gripped joystick pins it to the knob.
+      if (player1.panelOpen) updatePointingHand(player1, rooms.left, direction("w", "s", "a", "d"), dt);
+      else if (!player1.gripping) moveHand(player1, direction("w", "s", "a", "d"), dt, rooms.left);
+      if (player2.panelOpen) updatePointingHand(player2, rooms.right, direction("ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"), dt);
+      else if (!player2.gripping) moveHand(player2, direction("ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"), dt, rooms.right);
 
       const moved1 = updateMachine(player1, 0, dt);
       const moved2 = updateMachine(player2, 1, dt);
       if (player1.gripping) placeHandOnKnob(player1, rooms.left);
       if (player2.gripping) placeHandOnKnob(player2, rooms.right);
-      if (player1.fireOpen) placeHandOnFire(player1, rooms.left);
-      if (player2.fireOpen) placeHandOnFire(player2, rooms.right);
-      // The pointing fingertip is drawn later, on top of the zoom window.
-      updatePointingHand(player1, rooms.left);
-      updatePointingHand(player2, rooms.right);
       if (moved1 || moved2) battlefieldDirty = true;
       // The last small step must be saved even if the throttle window has not ended.
       if ((player1WasMoving && !moved1) || (player2WasMoving && !moved2)) flushBattlefield(frameTime, true);
@@ -598,71 +617,63 @@
       return linear * linear * (3 - 2 * linear);
     }
 
-    // Glide the fingertip onto the highlighted key, or onto the window's close button.
-    function updatePointingHand(player, room) {
+    // Keep the whole cursor inside this player's half. The hotspot is the fingertip.
+    function clampPointingHand(player, room) {
+      const cell = POINT_HAND_CELL;
+      const cols = POINT_HAND_BITMAP[0].length;
+      const rows = POINT_HAND_BITMAP.length;
+      let minX = room.left + POINT_HOT_COL * cell;
+      let maxX = room.right - (cols - 1 - POINT_HOT_COL) * cell;
+      let minY = POINT_HOT_ROW * cell;
+      let maxY = canvas.height - (rows - 1 - POINT_HOT_ROW) * cell;
+      if (minX > maxX) player.pointX = (room.left + room.right) / 2;
+      else player.pointX = clampNumber(player.pointX, minX, maxX);
+      if (minY > maxY) player.pointY = canvas.height / 2;
+      else player.pointY = clampNumber(player.pointY, minY, maxY);
+    }
+
+    // The fingertip moves with the direction keys, at the same speed as the room hand.
+    function updatePointingHand(player, room, dir, dt) {
       if (!player.panelOpen) {
         player.pointReady = false;
         player.pointPressFrom = -1;
         return;
       }
-      const goal = pointingTipTarget(player, room);
-      const goalMoved = !player.pointReady
-        || Math.hypot(goal.x - player.pointGoalX, goal.y - player.pointGoalY) > 0.5;
-      if (goalMoved) {
-        player.pointFromX = player.pointReady ? player.pointX : goal.x;
-        player.pointFromY = player.pointReady ? player.pointY : goal.y;
-        player.pointGoalX = goal.x;
-        player.pointGoalY = goal.y;
-        player.pointGlideFrom = frameTime;
+      if (!player.pointReady) {
+        const panel = getZoomRect(room);
+        player.pointX = panel.x + panel.width / 2;
+        player.pointY = panel.y + panel.height / 2;
         player.pointReady = true;
       }
-      const elapsed = (frameTime - player.pointGlideFrom) / 1000;
-      let t = POINT_GLIDE_SECONDS <= 0 ? 1 : elapsed / POINT_GLIDE_SECONDS;
-      if (t < 0) t = 0;
-      if (t > 1) t = 1;
-      const s = t * t * (3 - 2 * t);
-      player.pointX = player.pointFromX + (player.pointGoalX - player.pointFromX) * s;
-      player.pointY = player.pointFromY + (player.pointGoalY - player.pointFromY) * s;
+      player.pointX += dir.x * HAND_SPEED * dt;
+      player.pointY += dir.y * HAND_SPEED * dt;
+      clampPointingHand(player, room);
+      if (player.panelKind === "fire") player.fireIndex = keyUnderPoint(player, room);
     }
 
-    // Index finger straight up. The other fingers stay curled against the palm.
+    // White palm, black steps, and a short cuff in this player's color.
     function drawPointingHand(hand, color) {
       if (!hand.pointReady) return;
       const press = pointPressAmount(hand);
-      const scale = 1 - (1 - POINT_PRESS_SCALE) * press;
+      // One whole cell smaller while the finger is down, so the outline stays on the pixel grid.
+      const cell = press > (1 - POINT_PRESS_SCALE) ? POINT_HAND_CELL - 1 : POINT_HAND_CELL;
       const tipX = hand.pointX;
       const tipY = hand.pointY + POINT_PRESS_SHIFT * press;
+      const originX = Math.round(tipX - (POINT_HOT_COL + 0.5) * cell);
+      const originY = Math.round(tipY - (POINT_HOT_ROW + 0.5) * cell);
       ctx.save();
-      ctx.translate(tipX, tipY + POINT_INDEX_REACH * scale);
-      ctx.scale(scale, scale);
-      ctx.fillStyle = color;
-      // Curled fingers and thumb, tucked so only the index finger reaches the target.
-      const curled = [
-        { x: PALM_RADIUS * 0.42, y: PALM_RADIUS * -0.15, r: FINGER_RADIUS * 0.7 },
-        { x: PALM_RADIUS * 0.62, y: PALM_RADIUS * 0.28, r: FINGER_RADIUS * 0.58 },
-        { x: PALM_RADIUS * 0.22, y: PALM_RADIUS * 0.42, r: FINGER_RADIUS * 0.52 },
-        { x: PALM_RADIUS * -0.92, y: PALM_RADIUS * 0.08, r: THUMB_RADIUS * 0.78 }
-      ];
-      for (let i = 0; i < curled.length; i++) {
-        const spot = curled[i];
-        ctx.beginPath();
-        ctx.arc(spot.x, spot.y, spot.r, 0, Math.PI * 2);
-        ctx.fill();
+      ctx.imageSmoothingEnabled = false;
+      for (let y = 0; y < POINT_HAND_BITMAP.length; y++) {
+        const row = POINT_HAND_BITMAP[y];
+        for (let x = 0; x < row.length; x++) {
+          const pixel = row.charAt(x);
+          if (pixel === "0") continue;
+          if (pixel === "1") ctx.fillStyle = "#000000";
+          else if (pixel === "3") ctx.fillStyle = color;
+          else ctx.fillStyle = "#ffffff";
+          ctx.fillRect(originX + x * cell, originY + y * cell, cell, cell);
+        }
       }
-      const index = [
-        { x: 0, y: POINT_INDEX_REACH * -0.48, r: FINGER_RADIUS * 0.95 },
-        { x: 0, y: POINT_INDEX_REACH * -0.76, r: FINGER_RADIUS * 0.78 },
-        { x: 0, y: -POINT_INDEX_REACH, r: FINGER_RADIUS * 0.62 }
-      ];
-      for (let i = 0; i < index.length; i++) {
-        const spot = index[i];
-        ctx.beginPath();
-        ctx.arc(spot.x, spot.y, spot.r, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.beginPath();
-      ctx.arc(0, 0, PALM_RADIUS, 0, Math.PI * 2);
-      ctx.fill();
       ctx.restore();
     }
 
@@ -821,33 +832,50 @@
       };
     }
 
-    // Big plate on the left, centered top to bottom, in the open space under the stations.
-    // The monitor and radar stay where they are. Only the joystick moves to fit.
-    function joystickPlate(room, radarSize, margin, row) {
+    // Joystick group and fire control share the band under the monitor row.
+    // Three equal gaps: before the group, between the group and fire control, and after it.
+    // Each plate is centered in that band, so its top gap matches its bottom gap.
+    function lowerControls(room, row) {
       const roomWidth = room.right - room.left;
       const rowBottom = row.monitor.y + Math.max(row.monitor.height, row.radar.height);
-      const freeTop = rowBottom + margin;
-      const bottomLimit = canvas.height - margin;
-      let size = radarSize * JOYSTICK_SIZE_RATIO;
-      const freeHeight = bottomLimit - freeTop;
-      const maxWidth = roomWidth - margin * 2;
-      if (freeHeight > 36 && size > freeHeight) size = freeHeight;
-      if (size > maxWidth) size = maxWidth;
-      if (size < 36) size = 36;
+      const freeHeight = Math.max(1, canvas.height - rowBottom);
 
-      let y = (canvas.height - size) / 2;
-      if (y < freeTop) y = freeTop;
-      if (y + size > bottomLimit) y = Math.max(margin, bottomLimit - size);
-
+      let joySize = row.radar.width * JOYSTICK_SIZE_RATIO;
+      let fuelW = FUEL_GAUGE_WIDTH;
+      let fireW = FIRE_STATION_WIDTH;
+      let fireH = FIRE_STATION_HEIGHT;
+      if (joySize > freeHeight) joySize = freeHeight;
+      if (fireH > freeHeight) {
+        fireW *= freeHeight / fireH;
+        fireH = freeHeight;
+      }
+      const natural = joySize + fuelW + fireW;
+      if (natural > roomWidth && natural > 0) {
+        const fit = roomWidth / natural;
+        joySize *= fit;
+        fuelW *= fit;
+        fireW *= fit;
+        fireH *= fit;
+      }
+      const gap = (roomWidth - (joySize + fuelW + fireW)) / 3;
       return {
-        x: room.left + margin,
-        y: y,
-        width: size,
-        height: size
+        joystick: {
+          x: room.left + gap,
+          y: rowBottom + (freeHeight - joySize) / 2,
+          width: joySize,
+          height: joySize
+        },
+        fuelWidth: fuelW,
+        fire: {
+          x: room.left + gap * 2 + joySize + fuelW,
+          y: rowBottom + (freeHeight - fireH) / 2,
+          width: fireW,
+          height: fireH
+        }
       };
     }
 
-    // Three equal gaps across the whole room. The monitor and radar are not shifted.
+    // The monitor and radar stay on their own row. The lower plates are placed separately.
     function getStationLayout(room) {
       const roomWidth = room.right - room.left;
       let height = canvas.height * MONITOR_HEIGHT_RATIO;
@@ -859,10 +887,13 @@
       const radarSize = height;
       const gap = roomWidth * STATION_GAP_RATIO;
       const row = stationRow(room.left, room.right, radarSize, height, gap);
+      const lower = lowerControls(room, row);
       return {
         monitor: row.monitor,
         radar: row.radar,
-        joystick: joystickPlate(room, row.radar.width, gap, row)
+        joystick: lower.joystick,
+        fuelWidth: lower.fuelWidth,
+        fire: lower.fire
       };
     }
 
@@ -878,16 +909,14 @@
       return getStationLayout(room).joystick;
     }
 
-    // Gauge stacked on the refuel button. Together they match the joystick, on its inner side.
+    // Gauge stacked on the refuel button. Together they match the joystick and sit against it.
     function fuelColumnRect(room) {
-      const joy = getJoystickRect(room);
-      let width = FUEL_GAUGE_WIDTH;
-      const maxRight = room.right - 8;
-      if (joy.x + joy.width + width > maxRight) width = Math.max(28, maxRight - joy.x - joy.width);
+      const layout = getStationLayout(room);
+      const joy = layout.joystick;
       return {
         x: joy.x + joy.width,
         y: joy.y,
-        width: width,
+        width: layout.fuelWidth,
         height: joy.height
       };
     }
@@ -916,27 +945,8 @@
       };
     }
 
-    // Right side of the room, under the monitor row. The joystick and fuel column stay on the left.
     function getFireRect(room) {
-      const roomWidth = room.right - room.left;
-      const gap = roomWidth * STATION_GAP_RATIO;
-      const layout = getStationLayout(room);
-      const rowBottom = Math.max(
-        layout.monitor.y + layout.monitor.height,
-        layout.radar.y + layout.radar.height
-      );
-      const fuel = fuelColumnRect(room);
-      const leftLimit = fuel.x + fuel.width + gap;
-      const rightLimit = room.right - gap;
-      const topLimit = rowBottom + gap;
-      const bottomLimit = canvas.height - gap;
-      let width = FIRE_STATION_WIDTH;
-      let height = FIRE_STATION_HEIGHT;
-      if (rightLimit - leftLimit < width) width = Math.max(80, rightLimit - leftLimit);
-      if (bottomLimit - topLimit < height) height = Math.max(80, bottomLimit - topLimit);
-      let x = rightLimit - width;
-      if (x < leftLimit) x = leftLimit;
-      return { x: x, y: topLimit, width: width, height: height };
+      return getStationLayout(room).fire;
     }
 
     // Square around the palm. Fingers are outside this box on purpose.
@@ -1423,36 +1433,25 @@
       if (near && machineStarted && usable) drawInteractOutline(rect);
     }
 
-    // Move the keypad highlight by one key. The cursor stops at the edges of the grid.
-    function nudgeFireCursor(player, name, left, right, up, down) {
-      if (!player.fireOpen || !machineStarted) return;
-      let dx = 0;
-      let dy = 0;
-      if (name === left) dx = -1;
-      if (name === right) dx = 1;
-      if (name === up) dy = -1;
-      if (name === down) dy = 1;
-      if (dx === 0 && dy === 0) return;
-      const cols = FIRE_KEY_COLS;
-      const rows = Math.ceil(FIRE_KEYS.length / cols);
-      let col = player.fireIndex % cols;
-      let row = Math.floor(player.fireIndex / cols);
-      col += dx;
-      row += dy;
-      if (col < 0) col = 0;
-      if (col >= cols) col = cols - 1;
-      if (row < 0) row = 0;
-      if (row >= rows) row = rows - 1;
-      const next = row * cols + col;
-      if (next >= 0 && next < FIRE_KEYS.length) player.fireIndex = next;
+    function closeZoom(player) {
+      player.panelOpen = false;
+      player.panelKind = "";
+      player.fireOpen = false;
+      player.fireIndex = -1;
     }
 
-    // The hand grips the lower-left corner, outside the plate, so the label stays readable.
-    function placeHandOnFire(player, room) {
-      const rect = getFireRect(room);
-      player.x = rect.x - 6;
-      player.y = rect.y + rect.height - 8;
-      clampHand(player, room);
+    // Keypad cell under the fingertip, or -1 when the tip is somewhere else.
+    function keyUnderPoint(player, room) {
+      if (player.panelKind !== "fire") return -1;
+      const pad = zoomContent(room).keypad;
+      const padRect = { x: pad.x, y: pad.y, width: pad.width, height: pad.height };
+      if (!pointInRect(player.pointX, player.pointY, padRect)) return -1;
+      for (let i = 0; i < FIRE_KEYS.length; i++) {
+        const cell = fireKeyCell(pad, i);
+        const rect = { x: cell.x, y: cell.y, width: cell.w, height: cell.h };
+        if (pointInRect(player.pointX, player.pointY, rect)) return i;
+      }
+      return -1;
     }
 
     function pressFireKey(player) {
@@ -1461,9 +1460,7 @@
       player.pointPressIndex = player.fireIndex;
       const key = FIRE_KEYS[player.fireIndex];
       if (key === "DONE") {
-        player.fireOpen = false;
-        player.panelOpen = false;
-        player.panelKind = "";
+        closeZoom(player);
         return;
       }
       if (key === "CLR") {
@@ -2579,8 +2576,8 @@
       // Stations stay shut until H.O.W.L.E.R has finished starting.
       // The start button watches the held key itself, so this press is ignored.
       if (!machineStarted) return;
-      if (player.fireOpen) {
-        pressFireKey(player);
+      if (player.panelOpen) {
+        interactWithZoom(player, room);
         return;
       }
       if (player.refueling) {
@@ -2615,14 +2612,37 @@
       }
       if (kind === "fire") {
         player.fireOpen = true;
-        player.fireIndex = 0;
+        player.fireIndex = -1;
         player.panelOpen = true;
         player.panelKind = "fire";
-        placeHandOnFire(player, room);
+        player.pointReady = false;
         return;
       }
       player.panelOpen = true;
       player.panelKind = kind;
+      player.pointReady = false;
+    }
+
+    // The fingertip chooses the action. Outside the window, or on X, the window closes.
+    function interactWithZoom(player, room) {
+      const panel = getZoomRect(room);
+      const tip = { x: player.pointX, y: player.pointY };
+      const inside = pointInRect(tip.x, tip.y, panel);
+      const onClose = pointInRect(tip.x, tip.y, closeButtonRect(panel));
+      if (!inside || onClose) {
+        closeZoom(player);
+        return;
+      }
+      player.pointPressFrom = frameTime;
+      if (player.panelKind !== "fire") {
+        player.pointPressIndex = -1;
+        return;
+      }
+      const keyIndex = keyUnderPoint(player, room);
+      player.pointPressIndex = keyIndex;
+      if (keyIndex < 0) return;
+      player.fireIndex = keyIndex;
+      pressFireKey(player);
     }
 
     // Screen area inside a zoom frame, plus the fire keypad on its right half.
@@ -2648,17 +2668,6 @@
           height: screenH
         }
       };
-    }
-
-    // Where the extended fingertip rests while this zoom window is open.
-    function pointingTipTarget(player, room) {
-      const view = zoomContent(room);
-      if (player.panelKind === "fire") {
-        const cell = fireKeyCell(view.keypad, player.fireIndex);
-        return { x: cell.cx, y: cell.cy };
-      }
-      const button = closeButtonRect(view.panel);
-      return { x: button.x + button.width / 2, y: button.y + button.height / 2 };
     }
 
     function drawZoomPanel(room, player) {
@@ -2734,13 +2743,7 @@
       const panel = getZoomRect(room);
       const onClose = pointInRect(x, y, closeButtonRect(panel));
       const insidePanel = pointInRect(x, y, panel);
-      if (onClose || !insidePanel) {
-        player.panelOpen = false;
-        if (player.panelKind === "fire") {
-          player.fireOpen = false;
-          player.panelKind = "";
-        }
-      }
+      if (onClose || !insidePanel) closeZoom(player);
     }
 
     canvas.addEventListener("click", function (event) {
