@@ -17,6 +17,13 @@
     const WALL_WIDTH = 20;
     const HAND_SPEED = 250; // pixels per second
     const COUNTDOWN_SECONDS = 10;
+    // Both players hold the shared button this long before the countdown can start.
+    const HOLD_TO_START_SECONDS = 2;
+    const START_DRAIN_SECONDS = 0.5; // the ring empties this fast if either player lets go
+    const START_FADE_SECONDS = 0.45; // the button fades away once the hold is finished
+    const START_BUTTON_RADIUS = 36; // reaches into both rooms; the wall still blocks the hands
+    const START_RING_WIDTH = 9;
+    const WAITING_TEXT = "> Waiting for both players...";
     // H.O.W.L.E.R = Heavy Ordnance Weapon, Launch-Equation Ranged (said "Howler")
     const MACHINE_NAME = "H.O.W.L.E.R";
     // Drawn hand. The hitbox is a square around the palm. Fingers may stick out.
@@ -159,8 +166,8 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle" };
-    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle" };
+    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle" };
+    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle" };
 
     // The wall sits in the middle. Each player owns one side of it.
     function getRooms() {
@@ -234,6 +241,7 @@
       keys[name] = true;
       // Key repeat would open and close the panel over and over.
       if (alreadyDown) return;
+      // Holding the start button uses the same keys, but it is not a station press.
       if (name === INTERACT_KEY_P1) tryInteract(player1, getRooms().left);
       if (name === INTERACT_KEY_P2) tryInteract(player2, getRooms().right);
     });
@@ -398,7 +406,18 @@
       clampHand(player, room);
     }
 
+    function releaseLockedStations() {
+      if (machineStarted) return;
+      player1.panelOpen = false;
+      player1.panelKind = "";
+      player1.gripping = false;
+      player2.panelOpen = false;
+      player2.panelKind = "";
+      player2.gripping = false;
+    }
+
     function update(dt) {
+      releaseLockedStations();
       const rooms = getRooms();
       // A zoom panel freezes that hand. A gripped joystick pins it to the knob instead.
       if (!player1.panelOpen && !player1.gripping) moveHand(player1, direction("w", "s", "a", "d"), dt, rooms.left);
@@ -417,7 +436,7 @@
 
     function drawHand(hand, color) {
       ctx.fillStyle = color;
-      const holding = hand.panelOpen || hand.gripping;
+      const holding = hand.panelOpen || hand.gripping || hand.holdingStart;
       const pull = holding ? HOLD_FINGER_PULL : 1;
       const sizeRatio = holding ? HOLD_FINGER_RADIUS_RATIO : 1;
 
@@ -466,6 +485,7 @@
       drawRadar(rooms.right, player2);
       drawJoystick(rooms.left, player1);
       drawJoystick(rooms.right, player2);
+      drawStartButton();
 
       // Drawn last so the hand appears on top of the stations.
       drawHand(player1, COLOR_P1);
@@ -487,6 +507,7 @@
       if (dt > 0.05) dt = 0.05;
 
       update(dt);
+      updateStartHold(dt, time);
       updateCountdown(time);
       updatePingWarnings();
       flushBattlefield(time, false);
@@ -679,7 +700,7 @@
       ctx.fillRect(screenX, screenY, screenW, screenH);
 
       drawMessageList(player, screenX, screenY, screenW, screenH, 16, MONITOR_LINE_HEIGHT);
-      if (near) drawInteractOutline(rect);
+      if (near && machineStarted) drawInteractOutline(rect);
     }
 
     // Radar sits beside the monitor. Half of the square is RADAR_RANGE units.
@@ -706,7 +727,7 @@
       const ownerIndex = player === player1 ? 0 : 1;
       drawRadarPicture(screenX, screenY, screenW, screenH, ownerIndex, false);
       drawRedPing(rect, ownerIndex);
-      if (near) drawInteractOutline(rect);
+      if (near && machineStarted) drawInteractOutline(rect);
     }
 
     // Metal plate. The light edge is the top and left; the dark edge is the bottom and right.
@@ -1011,7 +1032,7 @@
         Math.max(5, rect.width * 0.08)
       );
       ctx.restore();
-      if (near) drawInteractOutline(rect);
+      if (near && machineStarted) drawInteractOutline(rect);
     }
 
     // Soft pulse around the station the hand can use. The station itself does not brighten.
@@ -1500,6 +1521,9 @@
     // Monitor and radar open a zoom panel. The joystick snaps the hand onto its knob.
     // Press the same key again to let go. The hand stays where the knob is.
     function tryInteract(player, room) {
+      // Stations stay shut until H.O.W.L.E.R has finished starting.
+      // The start button watches the held key itself, so this press is ignored.
+      if (!machineStarted) return;
       if (player.gripping) {
         player.gripping = false;
         player.tiltX = 0;
@@ -1525,7 +1549,7 @@
     }
 
     function drawZoomPanel(room, player) {
-      if (!player.panelOpen) return;
+      if (!machineStarted || !player.panelOpen) return;
 
       ctx.fillStyle = COLOR_ROOM_DIM;
       ctx.fillRect(room.left, 0, room.right - room.left, canvas.height);
@@ -1612,8 +1636,8 @@
     }
 
     const countdownLines = [
-      { text: countdownText(COUNTDOWN_SECONDS) },
-      { text: countdownText(COUNTDOWN_SECONDS) }
+      { text: WAITING_TEXT },
+      { text: WAITING_TEXT }
     ];
     player1.messages.push(countdownLines[0]);
     player2.messages.push(countdownLines[1]);
@@ -1622,9 +1646,167 @@
     let countdownSecondsLeft = COUNTDOWN_SECONDS;
     let machineStarted = false;
     let machineStartedAt = -1;
+    let startupBegun = false;
+    let startProgress = 0;
+    let startFade = 1;
+
+    // Circle centered on the wall. Each half sticks into one player's room.
+    function getStartButton() {
+      const rooms = getRooms();
+      return {
+        cx: rooms.wallX + WALL_WIDTH / 2,
+        cy: canvas.height / 2,
+        r: START_BUTTON_RADIUS
+      };
+    }
+
+    // The palm box has to meet that player's half of the circle.
+    function handTouchesOwnStartHalf(player) {
+      const button = getStartButton();
+      const box = handBox(player);
+      const nearestX = Math.max(box.left, Math.min(button.cx, box.right));
+      const nearestY = Math.max(box.top, Math.min(button.cy, box.bottom));
+      if (Math.hypot(button.cx - nearestX, button.cy - nearestY) > button.r) return false;
+      if (player === player1) return nearestX <= button.cx;
+      return nearestX >= button.cx;
+    }
+
+    function isHoldingStart(player) {
+      if (startupBegun) return false;
+      const key = player === player1 ? INTERACT_KEY_P1 : INTERACT_KEY_P2;
+      if (!keys[key]) return false;
+      return handTouchesOwnStartHalf(player);
+    }
+
+    function beginStartup(time) {
+      startupBegun = true;
+      countdownStartTime = time;
+      const text = countdownText(COUNTDOWN_SECONDS);
+      countdownLines[0].text = text;
+      countdownLines[1].text = text;
+      player1.holdingStart = false;
+      player2.holdingStart = false;
+    }
+
+    // Both hands and both interact keys have to stay down together.
+    function updateStartHold(dt, time) {
+      if (startupBegun) {
+        player1.holdingStart = false;
+        player2.holdingStart = false;
+        if (startFade > 0) {
+          startFade -= dt / START_FADE_SECONDS;
+          if (startFade < 0) startFade = 0;
+        }
+        return;
+      }
+      const hold1 = isHoldingStart(player1);
+      const hold2 = isHoldingStart(player2);
+      player1.holdingStart = hold1;
+      player2.holdingStart = hold2;
+      if (hold1 && hold2) {
+        startProgress += dt / HOLD_TO_START_SECONDS;
+        if (startProgress >= 1) {
+          startProgress = 1;
+          beginStartup(time);
+        }
+      } else if (startProgress > 0) {
+        startProgress -= dt / START_DRAIN_SECONDS;
+        if (startProgress < 0) startProgress = 0;
+      }
+    }
+
+    function drawStartHalf(cx, cy, radius, fromWest) {
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      if (fromWest) ctx.arc(cx, cy, radius, -Math.PI / 2, Math.PI / 2, true);
+      else ctx.arc(cx, cy, radius, -Math.PI / 2, Math.PI / 2, false);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    function drawStartButton() {
+      if (startupBegun && startFade <= 0) return;
+      const button = getStartButton();
+      const inner = button.r - START_RING_WIDTH;
+      ctx.save();
+      ctx.globalAlpha = startupBegun ? Math.max(0, startFade) : 1;
+      if (startupBegun) {
+        const sink = 0.82 + 0.18 * startFade;
+        ctx.translate(button.cx, button.cy);
+        ctx.scale(sink, sink);
+        ctx.translate(-button.cx, -button.cy);
+      }
+
+      ctx.fillStyle = COLOR_JOYSTICK_EDGE_LIGHT;
+      ctx.beginPath();
+      ctx.arc(button.cx, button.cy, button.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COLOR_JOYSTICK_EDGE_DARK;
+      ctx.beginPath();
+      ctx.arc(button.cx, button.cy, button.r - 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = player1.holdingStart ? COLOR_JOYSTICK_LED_ON : COLOR_JOYSTICK_KNOB_CAP;
+      drawStartHalf(button.cx, button.cy, inner, true);
+      ctx.fillStyle = player2.holdingStart ? COLOR_JOYSTICK_LED_ON : COLOR_JOYSTICK_KNOB_CAP;
+      drawStartHalf(button.cx, button.cy, inner, false);
+
+      ctx.strokeStyle = COLOR_JOYSTICK_EDGE_DARK;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(button.cx, button.cy - inner);
+      ctx.lineTo(button.cx, button.cy + inner);
+      ctx.stroke();
+
+      if (startProgress > 0) {
+        // Drawn on the metal ring so it does not cover the joystick beside the wall.
+        ctx.strokeStyle = COLOR_RADAR_SWEEP;
+        ctx.lineWidth = 5;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.arc(
+          button.cx,
+          button.cy,
+          button.r - 4,
+          -Math.PI / 2,
+          -Math.PI / 2 + Math.PI * 2 * startProgress
+        );
+        ctx.stroke();
+      }
+
+      // Two short lines so the plate stays in the gap beside player 2's joystick.
+      const labelLines = ["HOLD TO", "START"];
+      ctx.font = "bold 12px sans-serif";
+      let plateW = 0;
+      for (let i = 0; i < labelLines.length; i++) {
+        plateW = Math.max(plateW, ctx.measureText(labelLines[i]).width);
+      }
+      plateW += 14;
+      const rooms = getRooms();
+      const roomGap = (rooms.left.right - rooms.left.left) * STATION_GAP_RATIO;
+      const maxPlate = WALL_WIDTH + roomGap * 2 - 10;
+      if (plateW > maxPlate) plateW = maxPlate;
+      const plateH = 28;
+      const plateX = button.cx - plateW / 2;
+      let plateY = button.cy + button.r + 10;
+      if (plateY + plateH > canvas.height - 4) plateY = canvas.height - plateH - 4;
+      ctx.fillStyle = COLOR_JOYSTICK_LABEL;
+      ctx.fillRect(plateX, plateY, plateW, plateH);
+      ctx.strokeStyle = COLOR_JOYSTICK_EDGE_LIGHT;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(plateX + 0.5, plateY + 0.5, plateW - 1, plateH - 1);
+      ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(labelLines[0], button.cx, plateY + 9);
+      ctx.fillText(labelLines[1], button.cx, plateY + 20);
+      ctx.restore();
+    }
 
     // Uses the animation timestamp so the ticks stay one second apart.
+    // The clock stays off until both players finish the hold.
     function updateCountdown(time) {
+      if (!startupBegun) return;
       if (countdownSecondsLeft === 0) return;
       if (countdownStartTime < 0) countdownStartTime = time;
       const elapsed = (time - countdownStartTime) / 1000;
