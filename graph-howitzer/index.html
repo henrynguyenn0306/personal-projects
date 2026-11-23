@@ -68,15 +68,23 @@
     const COLOR_MONITOR_SCREEN = "#000000";
     const COLOR_MONITOR_TEXT = "#39ff6a";
     const COLOR_MONITOR_WARNING = "#ff4040";
-    // Allowed statuses. Intact is the healthy resting state.
-    // Moving is set while a joystick is actually driving.
-    const STATUS_NAMES = ["Intact", "Moving", "Redirecting", "Attacking", "Damaged"];
-    const STATUS_COLORS = {
+    // A second outline a few pixels outside the station the hand can use.
+    const INTERACT_OUTLINE_GAP = 6;
+    const INTERACT_OUTLINE_WIDTH = 4;
+    const INTERACT_PULSE_SECONDS = 1.1; // one soft brighten and dim
+    // Health of the machine. Damaged is for later, when health drops.
+    const CONDITION_NAMES = ["Intact", "Damaged"];
+    const CONDITION_COLORS = {
       Intact: "#39ff6a",
+      Damaged: "#ff4040"
+    };
+    // What the machine is doing. Idle means it is sitting still.
+    const ACTIVITY_NAMES = ["Idle", "Moving", "Redirecting", "Attacking"];
+    const ACTIVITY_COLORS = {
+      Idle: "#39ff6a",
       Moving: "#3ee0ff",
       Redirecting: "#ffe14a",
-      Attacking: "#ff8a3d",
-      Damaged: "#ff4040"
+      Attacking: "#ff8a3d"
     };
     const MAX_HEALTH = 100;
     const PING_WARNING_ENEMY = "> WARNING: Enemy signal detected!";
@@ -122,7 +130,7 @@
     const MAX_MOVE_SPEED = 8; // battlefield units per second at full tilt
     const ACCELERATION = 3; // units per second squared; about 2.5 seconds from a stop to full speed
     const DECELERATION = 5; // units per second squared; slows down a bit faster than it speeds up
-    const MOVE_STATUS_SPEED = 0.2; // slower than this, the status returns to Intact
+    const MOVE_STATUS_SPEED = 0.2; // slower than this, the activity returns to Idle
     const STATE_PUBLISH_SECONDS = 0.1; // tell the viewer about 10 times a second
     const COLOR_JOYSTICK_WELL = "#222228";
     const COLOR_JOYSTICK_STICK = "#8d8d99";
@@ -135,8 +143,8 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, tiltX: 0, tiltY: 0, status: "Intact" };
-    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, tiltX: 0, tiltY: 0, status: "Intact" };
+    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle" };
+    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle" };
 
     // The wall sits in the middle. Each player owns one side of it.
     function getRooms() {
@@ -345,8 +353,8 @@
         moved = stepMachine(unit, dt);
       }
       const speed = Math.hypot(unit.vx, unit.vy);
-      if (speed > MOVE_STATUS_SPEED) setStatus(player, "Moving");
-      else if (player.status === "Moving") setStatus(player, "Intact");
+      if (speed > MOVE_STATUS_SPEED) setActivity(player, "Moving");
+      else if (player.activity === "Moving") setActivity(player, "Idle");
       return moved;
     }
 
@@ -476,19 +484,34 @@
       player.messages.push(text);
     }
 
-    // Set the pinned status. Unknown names are ignored.
-    function setStatus(player, status) {
-      for (let i = 0; i < STATUS_NAMES.length; i++) {
-        if (STATUS_NAMES[i] === status) {
-          player.status = status;
+    // Set the health condition. Unknown names are ignored.
+    function setCondition(player, condition) {
+      for (let i = 0; i < CONDITION_NAMES.length; i++) {
+        if (CONDITION_NAMES[i] === condition) {
+          player.condition = condition;
           return;
         }
       }
     }
 
-    function statusColor(status) {
-      if (STATUS_COLORS[status]) return STATUS_COLORS[status];
-      return STATUS_COLORS.Intact;
+    // Set what the machine is doing. Unknown names are ignored.
+    function setActivity(player, activity) {
+      for (let i = 0; i < ACTIVITY_NAMES.length; i++) {
+        if (ACTIVITY_NAMES[i] === activity) {
+          player.activity = activity;
+          return;
+        }
+      }
+    }
+
+    function conditionColor(condition) {
+      if (CONDITION_COLORS[condition]) return CONDITION_COLORS[condition];
+      return CONDITION_COLORS.Intact;
+    }
+
+    function activityColor(activity) {
+      if (ACTIVITY_COLORS[activity]) return ACTIVITY_COLORS[activity];
+      return ACTIVITY_COLORS.Idle;
     }
 
     // Health is stored from 0 to MAX_HEALTH. The monitor shows that as a percent.
@@ -642,6 +665,7 @@
       ctx.fillRect(screenX, screenY, screenW, screenH);
 
       drawMessageList(player, screenX, screenY, screenW, screenH, 16, MONITOR_LINE_HEIGHT);
+      if (near) drawInteractOutline(rect);
     }
 
     // Radar sits beside the monitor. Half of the square is RADAR_RANGE units.
@@ -664,6 +688,7 @@
       const ownerIndex = player === player1 ? 0 : 1;
       drawRadarPicture(screenX, screenY, screenW, screenH, ownerIndex, false);
       drawRedPing(rect, ownerIndex);
+      if (near) drawInteractOutline(rect);
     }
 
     // Plate, stick, and knob. tiltX is right. tiltY is battlefield up. Each is about -1 to 1.
@@ -712,6 +737,20 @@
         tilt.y,
         Math.max(5, rect.width * 0.08)
       );
+      if (near) drawInteractOutline(rect);
+    }
+
+    // Soft pulse around the station the hand can use, outside the frame glow.
+    function drawInteractOutline(rect) {
+      const turns = frameTime / 1000 / INTERACT_PULSE_SECONDS;
+      const wave = 0.5 + 0.5 * Math.sin(turns * Math.PI * 2);
+      const pulse = 0.62 + 0.38 * wave;
+      const gap = INTERACT_OUTLINE_GAP;
+      ctx.save();
+      ctx.strokeStyle = "rgba(180, 255, 214, " + pulse.toFixed(3) + ")";
+      ctx.lineWidth = INTERACT_OUTLINE_WIDTH;
+      ctx.strokeRect(rect.x - gap, rect.y - gap, rect.width + gap * 2, rect.height + gap * 2);
+      ctx.restore();
     }
 
     // Small square in the bottom-right bezel. Size follows the frame thickness.
@@ -732,13 +771,23 @@
       ctx.fillRect(x, y, size, size);
     }
 
-    // "" when the ping is off. "enemy" or "obstacle" says why it is on.
-    function redPingReason(ownerIndex) {
-      if (!machineStarted) return "";
+    function enemyInRadarRange(ownerIndex) {
+      if (!machineStarted) return false;
       const you = battlefield.players[ownerIndex];
       const enemy = battlefield.players[1 - ownerIndex];
-      if (Math.hypot(enemy.x - you.x, enemy.y - you.y) <= RADAR_RANGE) return "enemy";
-      if (collidesWithObstacle(enemy.x, enemy.y, OBSTACLE_NEAR_DISTANCE)) return "obstacle";
+      return Math.hypot(enemy.x - you.x, enemy.y - you.y) <= RADAR_RANGE;
+    }
+
+    function enemyNearObstacle(ownerIndex) {
+      if (!machineStarted) return false;
+      const enemy = battlefield.players[1 - ownerIndex];
+      return collidesWithObstacle(enemy.x, enemy.y, OBSTACLE_NEAR_DISTANCE);
+    }
+
+    // "" when the ping is off. "enemy" or "obstacle" says why it is on.
+    function redPingReason(ownerIndex) {
+      if (enemyInRadarRange(ownerIndex)) return "enemy";
+      if (enemyNearObstacle(ownerIndex)) return "obstacle";
       return "";
     }
 
@@ -746,18 +795,33 @@
       return redPingReason(ownerIndex) !== "";
     }
 
-    // One warning line when the ping turns on. Blinking does not add more lines.
-    const pingWasOn = [false, false];
-    function updatePingWarnings() {
-      for (let i = 0; i < pingWasOn.length; i++) {
-        const reason = redPingReason(i);
-        const on = reason !== "";
-        if (on && !pingWasOn[i]) {
-          const player = i === 0 ? player1 : player2;
-          const text = reason === "enemy" ? PING_WARNING_ENEMY : PING_WARNING_OBSTACLE;
-          addStatusMessage(player, { text: text, color: COLOR_MONITOR_WARNING });
+    // Find a warning line by its type, so it can be removed without touching other lines.
+    function warningIndex(player, kind) {
+      for (let i = 0; i < player.messages.length; i++) {
+        const entry = player.messages[i];
+        if (entry && entry.kind === kind) return i;
+      }
+      return -1;
+    }
+
+    // Add the line when the warning turns on. Remove that same line when it turns off.
+    function setWarningLine(player, kind, text, active) {
+      const index = warningIndex(player, kind);
+      if (active) {
+        if (index === -1) {
+          player.messages.push({ text: text, color: COLOR_MONITOR_WARNING, kind: kind });
         }
-        pingWasOn[i] = on;
+        return;
+      }
+      if (index !== -1) player.messages.splice(index, 1);
+    }
+
+    // Each warning is its own line. It comes back later if the same thing happens again.
+    function updatePingWarnings() {
+      const players = [player1, player2];
+      for (let i = 0; i < players.length; i++) {
+        setWarningLine(players[i], "enemy", PING_WARNING_ENEMY, enemyInRadarRange(i));
+        setWarningLine(players[i], "obstacle", PING_WARNING_OBSTACLE, enemyNearObstacle(i));
       }
     }
 
@@ -913,12 +977,91 @@
       ctx.restore();
     }
 
+    // Distance from this machine's center to the closest point on an obstacle's edge.
+    function distanceToObstacleEdge(obstacle, you) {
+      if (obstacle.type === "tower") {
+        const gap = Math.hypot(obstacle.x - you.x, obstacle.y - you.y) - obstacle.r;
+        return gap < 0 ? 0 : gap;
+      }
+      const left = obstacle.x - obstacle.w / 2;
+      const right = obstacle.x + obstacle.w / 2;
+      const top = obstacle.y - obstacle.h / 2;
+      const bottom = obstacle.y + obstacle.h / 2;
+      const nearestX = Math.max(left, Math.min(you.x, right));
+      const nearestY = Math.max(top, Math.min(you.y, bottom));
+      const outside = Math.hypot(nearestX - you.x, nearestY - you.y);
+      if (outside > 0) return outside;
+      return Math.min(you.x - left, right - you.x, you.y - top, bottom - you.y);
+    }
+
+    // -1 when nothing is inside RADAR_RANGE. Otherwise the nearest edge distance.
+    function nearestObstacleDistance(you) {
+      const obstacles = battlefield.obstacles || [];
+      let best = -1;
+      for (let i = 0; i < obstacles.length; i++) {
+        const obstacle = obstacles[i];
+        if (!obstacleInRange(obstacle, you)) continue;
+        const dist = distanceToObstacleEdge(obstacle, you);
+        if (best < 0 || dist < best) best = dist;
+      }
+      return best;
+    }
+
+    function radarInfoLines(ownerIndex) {
+      const you = battlefield.players[ownerIndex];
+      const enemy = battlefield.players[1 - ownerIndex];
+      const enemyDist = Math.hypot(enemy.x - you.x, enemy.y - you.y);
+      const lines = [];
+      if (enemyDist <= RADAR_RANGE) lines.push("Enemy distance: " + enemyDist.toFixed(1));
+      else lines.push("Enemy: no contact");
+      const obstacleDist = nearestObstacleDistance(you);
+      if (obstacleDist >= 0) lines.push("Nearest obstacle: " + obstacleDist.toFixed(1));
+      else lines.push("Obstacles: none in range");
+      return lines;
+    }
+
+    function drawRadarReadout(ownerIndex, x, y, maxWidth) {
+      const lines = radarInfoLines(ownerIndex);
+      let fontSize = 22;
+      ctx.font = fontSize + "px monospace";
+      let widest = 0;
+      for (let i = 0; i < lines.length; i++) {
+        widest = Math.max(widest, ctx.measureText(lines[i]).width);
+      }
+      if (widest > maxWidth && maxWidth > 40) {
+        fontSize = Math.max(14, Math.floor(fontSize * (maxWidth / widest)));
+        ctx.font = fontSize + "px monospace";
+      }
+      ctx.fillStyle = COLOR_MONITOR_TEXT;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      const lineHeight = fontSize + 10;
+      for (let i = 0; i < lines.length; i++) {
+        ctx.fillText(lines[i], x, y + i * lineHeight);
+      }
+    }
+
+    // Big square in the top-left. The green readout uses whatever space is left.
     function drawBigRadar(player, screenX, screenY, screenW, screenH) {
-      const size = Math.min(screenW, screenH);
-      const squareX = screenX + (screenW - size) / 2;
-      const squareY = screenY + (screenH - size) / 2;
+      const gap = 18;
+      const readoutBand = 72;
+      const sideBand = 240;
+      const sizeBeside = Math.min(screenH - 4, screenW - sideBand - gap);
+      const sizeAbove = Math.min(screenW - 4, screenH - readoutBand - gap);
+      let size = sizeAbove;
+      let readoutOnRight = false;
+      if (sizeBeside >= sizeAbove && sizeBeside >= 80) {
+        size = sizeBeside;
+        readoutOnRight = true;
+      }
+      if (size < 48) size = Math.min(screenW, screenH);
       const ownerIndex = player === player1 ? 0 : 1;
-      drawRadarPicture(squareX, squareY, size, size, ownerIndex, true);
+      drawRadarPicture(screenX, screenY, size, size, ownerIndex, true);
+      if (readoutOnRight) {
+        drawRadarReadout(ownerIndex, screenX + size + gap, screenY + 28, screenW - size - gap);
+      } else {
+        drawRadarReadout(ownerIndex, screenX + 4, screenY + size + gap, screenW - 8);
+      }
     }
 
     function messageText(entry) {
@@ -930,6 +1073,25 @@
     function messageColor(entry) {
       if (typeof entry === "string" || !entry.color) return COLOR_MONITOR_TEXT;
       return entry.color;
+    }
+
+    // "Status: Intact (100%) | Idle" — condition and health, then what the machine is doing.
+    function drawStatusLine(player, x, y, fontSize) {
+      const parts = [
+        { text: "Status: ", color: COLOR_MONITOR_TEXT },
+        { text: player.condition + " (" + healthPercent(player) + "%)", color: conditionColor(player.condition) },
+        { text: " | ", color: COLOR_MONITOR_TEXT },
+        { text: player.activity, color: activityColor(player.activity) }
+      ];
+      ctx.font = fontSize + "px monospace";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      let cursor = x;
+      for (let i = 0; i < parts.length; i++) {
+        ctx.fillStyle = parts[i].color;
+        ctx.fillText(parts[i].text, cursor, y);
+        cursor += ctx.measureText(parts[i].text).width;
+      }
     }
 
     function drawMessageList(player, screenX, screenY, screenW, screenH, fontSize, lineHeight) {
@@ -963,11 +1125,12 @@
       ctx.moveTo(screenX + 6, barY + 1);
       ctx.lineTo(screenX + screenW - 6, barY + 1);
       ctx.stroke();
-      ctx.fillStyle = statusColor(player.status);
-      ctx.font = fontSize + "px monospace";
-      ctx.textAlign = "left";
-      ctx.textBaseline = "top";
-      ctx.fillText("Status: " + player.status + " (" + healthPercent(player) + "%)", screenX + 8, barY + 6);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(screenX, barY, screenW, barH);
+      ctx.clip();
+      drawStatusLine(player, screenX + 8, barY + 6, fontSize);
+      ctx.restore();
     }
 
     function getZoomRect(room) {
@@ -1115,10 +1278,10 @@
       handleClick(point.x, point.y);
     });
 
-    addStatusMessage(player1, "> All systems ready.");
-    addStatusMessage(player2, "> All systems ready.");
-    setStatus(player1, "Intact");
-    setStatus(player2, "Intact");
+    setCondition(player1, "Intact");
+    setCondition(player2, "Intact");
+    setActivity(player1, "Idle");
+    setActivity(player2, "Idle");
 
     // One shared countdown, but each monitor keeps its own line so we can edit it in place.
     function countdownText(secondsLeft) {
