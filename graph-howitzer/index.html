@@ -23,7 +23,7 @@
     const START_FADE_SECONDS = 0.45; // the button fades away once the hold is finished
     const START_BUTTON_RADIUS = 36; // reaches into both rooms; the wall still blocks the hands
     const START_RING_WIDTH = 9;
-    const WAITING_TEXT = "> Waiting for both players...";
+    const WAITING_TEXT = "> SYS: AWAITING OPERATORS...";
     // H.O.W.L.E.R = Heavy Ordnance Weapon, Launch-Equation Ranged (said "Howler")
     const MACHINE_NAME = "H.O.W.L.E.R";
     // Drawn hand. The hitbox is a square around the palm. Fingers may stick out.
@@ -80,24 +80,24 @@
     const INTERACT_OUTLINE_WIDTH = 4;
     const INTERACT_PULSE_SECONDS = 1.1; // one soft brighten and dim
     // Health of the machine. Damaged is for later, when health drops.
-    const CONDITION_NAMES = ["Intact", "Damaged"];
+    const CONDITION_NAMES = ["INTACT", "DAMAGED"];
     const CONDITION_COLORS = {
-      Intact: "#39ff6a",
-      Damaged: "#ff4040"
+      INTACT: "#39ff6a",
+      DAMAGED: "#ff4040"
     };
-    // What the machine is doing. Idle means it is sitting still.
-    const ACTIVITY_NAMES = ["Idle", "Moving", "Redirecting", "Attacking", "Refueling"];
+    // What the machine is doing. IDLE means it is sitting still.
+    const ACTIVITY_NAMES = ["IDLE", "MOVING", "REDIRECTING", "ATTACKING", "REFUELING"];
     const ACTIVITY_COLORS = {
-      Idle: "#39ff6a",
-      Moving: "#3ee0ff",
-      Redirecting: "#ffe14a",
-      Attacking: "#ff8a3d",
-      Refueling: "#ffb020"
+      IDLE: "#39ff6a",
+      MOVING: "#3ee0ff",
+      REDIRECTING: "#ffe14a",
+      ATTACKING: "#ff8a3d",
+      REFUELING: "#ffb020"
     };
     const MAX_HEALTH = 100;
-    const PING_WARNING_ENEMY = "> WARNING: Enemy signal detected!";
-    const PING_WARNING_OBSTACLE = "> WARNING: Movement near obstacle detected!";
-    const PING_WARNING_SELF = "> WARNING: Obstacle too close!";
+    const PING_WARNING_ENEMY = "> ALERT: HOSTILE SIGNAL DETECTED.";
+    const PING_WARNING_OBSTACLE = "> WARNING: HOSTILE NEAR OBSTACLE.";
+    const PING_WARNING_SELF = "> WARNING: OBSTACLE PROXIMITY < 4 m.";
     // The square shows everything within 20 meters around this player.
     // The square's half-size maps to 20 meters.
     const RADAR_RANGE = 20;
@@ -152,14 +152,15 @@
     // Gauge and button share the joystick's height. The button is the bottom slice.
     const REFUEL_HEIGHT_RATIO = 0.28;
     const COLOR_REFUEL_DISABLED = "#7a7a84";
-    const COLLISION_HOLD_SECONDS = 1.5; // keep the line briefly so it does not flicker
-    const COLLISION_TEXT = "> There's a collision!";
+    // Adjacent still counts, so a machine pressed against a surface keeps the report.
+    const CONTACT_EPSILON = 0.05;
+    const COLLISION_TEXT = "> ALERT: COLLISION DETECTED.";
     const COLOR_FUEL_HIGH = "#39ff6a";
     const COLOR_FUEL_MID = "#ffe14a";
     const COLOR_FUEL_LOW = "#ff4040";
     const COLOR_REFUEL_LED = "#ffb020";
-    const LOW_FUEL_TEXT = "> Low fuel!";
-    const OUT_OF_FUEL_TEXT = "> Out of fuel!";
+    const LOW_FUEL_TEXT = "> WARNING: FUEL LOW (<20%).";
+    const OUT_OF_FUEL_TEXT = "> ALERT: FUEL DEPLETED. PROPULSION OFFLINE.";
     const STATE_PUBLISH_SECONDS = 0.1; // tell the viewer about 10 times a second
     // Gray and dark metal, like the rest of the console. Sizes below are fractions of the plate.
     const COLOR_JOYSTICK_PLATE = "#3a3a42";
@@ -185,8 +186,8 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle" };
-    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle" };
+    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "INTACT", activity: "IDLE" };
+    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "INTACT", activity: "IDLE" };
 
     // The wall sits in the middle. Each player owns one side of it.
     function getRooms() {
@@ -354,47 +355,54 @@
     }
 
     function playersTouch(a, b) {
-      return Math.abs(a.x - b.x) <= PLAYER_SIZE && Math.abs(a.y - b.y) <= PLAYER_SIZE;
+      return Math.abs(a.x - b.x) <= PLAYER_SIZE + CONTACT_EPSILON
+        && Math.abs(a.y - b.y) <= PLAYER_SIZE + CONTACT_EPSILON;
+    }
+
+    // True when this point is clear of obstacles and the other machine.
+    function positionClear(x, y, index) {
+      const other = battlefield.players[1 - index];
+      if (collidesWithObstacle(x, y, PLAYER_SIZE / 2)) return false;
+      if (playerSquaresOverlap(x, y, other)) return false;
+      return true;
+    }
+
+    // Walk toward the target on one axis. A block slides up to the surface and stops that axis.
+    function slideTo(unit, index, x, y) {
+      if (positionClear(x, y, index)) {
+        const moved = x !== unit.x || y !== unit.y;
+        unit.x = x;
+        unit.y = y;
+        return moved;
+      }
+      let lo = 0;
+      let hi = 1;
+      const x0 = unit.x;
+      const y0 = unit.y;
+      for (let i = 0; i < 14; i++) {
+        const t = (lo + hi) / 2;
+        if (positionClear(x0 + (x - x0) * t, y0 + (y - y0) * t, index)) lo = t;
+        else hi = t;
+      }
+      unit.x = x0 + (x - x0) * lo;
+      unit.y = y0 + (y - y0) * lo;
+      return lo > 0;
     }
 
     // Move on x, then on y. A blocked axis loses its velocity so the other axis can still slide.
     // Obstacles and the other machine both stop that axis. The field edge does not count as a collision.
     function stepMachine(unit, index, dt) {
       const radius = PLAYER_SIZE / 2;
-      const other = battlefield.players[1 - index];
       let moved = false;
-      let hit = false;
       const rawX = unit.x + unit.vx * dt;
       const tryX = clampNumber(rawX, -FIELD_X_MAX + radius, FIELD_X_MAX - radius);
-      const hitObstacleX = collidesWithObstacle(tryX, unit.y, radius);
-      const hitPlayerX = playerSquaresOverlap(tryX, unit.y, other);
-      if (hitObstacleX || hitPlayerX) {
-        unit.vx = 0;
-        hit = true;
-        if (hitPlayerX) noteCollision(1 - index);
-      } else {
-        if (tryX !== unit.x) {
-          unit.x = tryX;
-          moved = true;
-        }
-        if (tryX !== rawX) unit.vx = 0;
-      }
+      if (slideTo(unit, index, tryX, unit.y)) moved = true;
+      if (unit.x !== tryX || tryX !== rawX) unit.vx = 0;
       const rawY = unit.y + unit.vy * dt;
       const tryY = clampNumber(rawY, -FIELD_Y_MAX + radius, FIELD_Y_MAX - radius);
-      const hitObstacleY = collidesWithObstacle(unit.x, tryY, radius);
-      const hitPlayerY = playerSquaresOverlap(unit.x, tryY, other);
-      if (hitObstacleY || hitPlayerY) {
-        unit.vy = 0;
-        hit = true;
-        if (hitPlayerY) noteCollision(1 - index);
-      } else {
-        if (tryY !== unit.y) {
-          unit.y = tryY;
-          moved = true;
-        }
-        if (tryY !== rawY) unit.vy = 0;
-      }
-      return { moved: moved, hit: hit };
+      if (slideTo(unit, index, unit.x, tryY)) moved = true;
+      if (unit.y !== tryY || tryY !== rawY) unit.vy = 0;
+      return moved;
     }
 
     function clampFuel(fuel) {
@@ -410,7 +418,7 @@
         if (index !== -1) player.messages.splice(index, 1);
         return;
       }
-      const text = "> Refueling... " + percent + "%";
+      const text = "> REFUEL: IN PROGRESS... " + percent + "%";
       if (index === -1) player.messages.push({ text: text, color: COLOR_MONITOR_TEXT, kind: "refuel" });
       else player.messages[index].text = text;
     }
@@ -438,16 +446,8 @@
           const next = approachVelocity(unit.vx, unit.vy, targetX, targetY, dt);
           unit.vx = next.x;
           unit.vy = next.y;
-          const step = stepMachine(unit, index, dt);
-          moved = step.moved;
-          if (step.hit) noteCollision(index);
+          moved = stepMachine(unit, index, dt);
         }
-        const other = battlefield.players[1 - index];
-        if (playersTouch(unit, other)) {
-          noteCollision(index);
-          noteCollision(1 - index);
-        }
-        if (collidesWithObstacle(unit.x, unit.y, PLAYER_SIZE / 2)) noteCollision(index);
       }
       if (player.refueling && machineStarted) {
         unit.fuel = clampFuel(unit.fuel + dt * MAX_FUEL / REFUEL_SECONDS_FULL);
@@ -455,7 +455,7 @@
           unit.fuel = MAX_FUEL;
           player.refueling = false;
           setRefuelLine(player, false);
-          addStatusMessage(player, "> Fuel tank full.");
+          addStatusMessage(player, "> REFUEL: COMPLETE. TANK 100%.");
         } else {
           setRefuelLine(player, true, Math.round(unit.fuel));
         }
@@ -468,9 +468,9 @@
         }
       }
       const speed = Math.hypot(unit.vx, unit.vy);
-      if (player.refueling) setActivity(player, "Refueling");
-      else if (speed > MOVE_STATUS_SPEED) setActivity(player, "Moving");
-      else if (player.activity === "Moving" || player.activity === "Refueling") setActivity(player, "Idle");
+      if (player.refueling) setActivity(player, "REFUELING");
+      else if (speed > MOVE_STATUS_SPEED) setActivity(player, "MOVING");
+      else if (player.activity === "MOVING" || player.activity === "REFUELING") setActivity(player, "IDLE");
       return moved;
     }
 
@@ -645,12 +645,12 @@
 
     function conditionColor(condition) {
       if (CONDITION_COLORS[condition]) return CONDITION_COLORS[condition];
-      return CONDITION_COLORS.Intact;
+      return CONDITION_COLORS.INTACT;
     }
 
     function activityColor(activity) {
       if (ACTIVITY_COLORS[activity]) return ACTIVITY_COLORS[activity];
-      return ACTIVITY_COLORS.Idle;
+      return ACTIVITY_COLORS.IDLE;
     }
 
     // Health is stored from 0 to MAX_HEALTH. The monitor shows that as a percent.
@@ -1396,19 +1396,19 @@
       }
     }
 
-    // Pushed forward on every contact, so the line stays up during a hit and briefly after.
-    let collisionUntil = [0, 0];
-
-    function noteCollision(index) {
-      const until = frameTime + COLLISION_HOLD_SECONDS * 1000;
-      if (until > collisionUntil[index]) collisionUntil[index] = until;
+    // Contact is the position itself. The line drops the moment the machines separate.
+    function machineInContact(index) {
+      if (!machineStarted) return false;
+      const unit = battlefield.players[index];
+      const other = battlefield.players[1 - index];
+      if (playersTouch(unit, other)) return true;
+      return collidesWithObstacle(unit.x, unit.y, PLAYER_SIZE / 2 + CONTACT_EPSILON);
     }
 
     function updateCollisionWarnings() {
       const players = [player1, player2];
       for (let i = 0; i < players.length; i++) {
-        const active = machineStarted && frameTime < collisionUntil[i];
-        setWarningLine(players[i], "collision", COLLISION_TEXT, active);
+        setWarningLine(players[i], "collision", COLLISION_TEXT, machineInContact(i));
       }
     }
 
@@ -1687,10 +1687,10 @@
       return entry.color;
     }
 
-    // "Status: Intact (100%) | Idle" — condition and health, then what the machine is doing.
+    // "STATUS: INTACT (100%) | IDLE" — condition and health, then what the machine is doing.
     function drawStatusLine(player, x, y, fontSize) {
       const parts = [
-        { text: "Status: ", color: COLOR_MONITOR_TEXT },
+        { text: "STATUS: ", color: COLOR_MONITOR_TEXT },
         { text: player.condition + " (" + healthPercent(player) + "%)", color: conditionColor(player.condition) },
         { text: " | ", color: COLOR_MONITOR_TEXT },
         { text: player.activity, color: activityColor(player.activity) }
@@ -1910,15 +1910,15 @@
       handleClick(point.x, point.y);
     });
 
-    setCondition(player1, "Intact");
-    setCondition(player2, "Intact");
-    setActivity(player1, "Idle");
-    setActivity(player2, "Idle");
+    setCondition(player1, "INTACT");
+    setCondition(player2, "INTACT");
+    setActivity(player1, "IDLE");
+    setActivity(player2, "IDLE");
 
     // One shared countdown, but each monitor keeps its own line so we can edit it in place.
     function countdownText(secondsLeft) {
-      if (secondsLeft <= 0) return "> " + MACHINE_NAME + " started.";
-      return "> Starting " + MACHINE_NAME + " in " + secondsLeft + "s";
+      if (secondsLeft <= 0) return "> BOOT COMPLETE. ALL UNITS NOMINAL.";
+      return "> BOOT SEQUENCE: " + MACHINE_NAME + " ONLINE IN " + secondsLeft + "s";
     }
 
     const countdownLines = [
