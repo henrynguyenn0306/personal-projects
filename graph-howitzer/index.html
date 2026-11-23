@@ -68,7 +68,7 @@
     const COLOR_MONITOR_SCREEN = "#000000";
     const COLOR_MONITOR_TEXT = "#39ff6a";
     const COLOR_MONITOR_WARNING = "#ff4040";
-    // Allowed status names. Only Idle is used right now.
+    // Allowed status names. Moving is set while a joystick is actually driving.
     const STATUS_NAMES = ["Idle", "Moving", "Redirecting", "Attacking", "Damaged"];
     const STATUS_COLORS = {
       Idle: "#39ff6a",
@@ -108,6 +108,18 @@
     const RED_PING_BLINK_SECONDS = 0.4;
     const COLOR_RED_PING_OFF = "#3a1518";
     const COLOR_RED_PING_ON = "#ff2a2a";
+    // Joystick station under the monitor and radar. No fuel yet.
+    const JOYSTICK_SIZE = 72;
+    const JOYSTICK_GAP = 20; // space between the station row and the base plate
+    const JOYSTICK_WELL_RATIO = 0.56; // dark circle in the middle of the plate
+    const JOYSTICK_ICON_LEAN = 0.7; // the room stick rests pointing up
+    const JOYSTICK_STICK_RATIO = 0.22; // how far the big knob can lean, compared with the plate
+    const JOYSTICK_KNOB_RATIO = 0.13;
+    const MOVE_SPEED = 8; // battlefield units per second
+    const STATE_PUBLISH_SECONDS = 0.1; // tell the viewer about 10 times a second
+    const COLOR_JOYSTICK_WELL = "#222228";
+    const COLOR_JOYSTICK_STICK = "#8d8d99";
+    const COLOR_JOYSTICK_KNOB = "#d8d8e2";
 
     const canvas = document.getElementById("room");
     const ctx = canvas.getContext("2d");
@@ -219,11 +231,64 @@
       clampHand(hand, room);
     }
 
+    // Screen up is negative. Battlefield up is positive, for both players.
+    function battlefieldStick(player) {
+      const screen = player === player1
+        ? direction("w", "s", "a", "d")
+        : direction("ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight");
+      return { x: screen.x, y: -screen.y };
+    }
+
+    function clampNumber(value, min, max) {
+      if (value < min) return min;
+      if (value > max) return max;
+      return value;
+    }
+
+    // Move on x, then on y, so a blocked axis still lets the machine slide along a wall.
+    function stepMachine(unit, dir, dt) {
+      if (dir.x === 0 && dir.y === 0) return false;
+      const radius = PLAYER_SIZE / 2;
+      let moved = false;
+      const tryX = clampNumber(unit.x + dir.x * MOVE_SPEED * dt, -FIELD_X_MAX + radius, FIELD_X_MAX - radius);
+      if (tryX !== unit.x && !collidesWithObstacle(tryX, unit.y, radius)) {
+        unit.x = tryX;
+        moved = true;
+      }
+      const tryY = clampNumber(unit.y + dir.y * MOVE_SPEED * dt, -FIELD_Y_MAX + radius, FIELD_Y_MAX - radius);
+      if (tryY !== unit.y && !collidesWithObstacle(unit.x, tryY, radius)) {
+        unit.y = tryY;
+        moved = true;
+      }
+      return moved;
+    }
+
+    // Keys drive the machine only while this player's joystick panel is open.
+    // The machine stays put until H.O.W.L.E.R has started.
+    function updateMachine(player, index, dt) {
+      const driving = player.panelOpen && player.panelKind === "joystick";
+      let moved = false;
+      if (driving && machineStarted) {
+        moved = stepMachine(battlefield.players[index], battlefieldStick(player), dt);
+      }
+      if (moved) setStatus(player, "Moving");
+      else if (player.status === "Moving") setStatus(player, "Idle");
+      return moved;
+    }
+
     function update(dt) {
       const rooms = getRooms();
       // An open zoom panel freezes that hand. The other player keeps moving.
       if (!player1.panelOpen) moveHand(player1, direction("w", "s", "a", "d"), dt, rooms.left);
       if (!player2.panelOpen) moveHand(player2, direction("ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"), dt, rooms.right);
+
+      const moved1 = updateMachine(player1, 0, dt);
+      const moved2 = updateMachine(player2, 1, dt);
+      if (moved1 || moved2) battlefieldDirty = true;
+      // The last small step must be saved even if the throttle window has not ended.
+      if ((player1WasMoving && !moved1) || (player2WasMoving && !moved2)) flushBattlefield(frameTime, true);
+      player1WasMoving = moved1;
+      player2WasMoving = moved2;
     }
 
     function drawHand(hand, color) {
@@ -275,6 +340,8 @@
       drawMonitor(rooms.right, player2);
       drawRadar(rooms.left, player1);
       drawRadar(rooms.right, player2);
+      drawJoystick(rooms.left, player1);
+      drawJoystick(rooms.right, player2);
 
       // Drawn last so the hand appears on top of the stations.
       drawHand(player1, COLOR_P1);
@@ -298,6 +365,7 @@
       update(dt);
       updateCountdown(time);
       updatePingWarnings();
+      flushBattlefield(time, false);
       draw();
       requestAnimationFrame(frame);
     }
@@ -357,14 +425,37 @@
         width: monitorWidth,
         height: height
       };
+      const radar = {
+        x: monitor.x + monitor.width + gap,
+        y: monitor.y,
+        width: radarSize,
+        height: radarSize
+      };
       return {
         monitor: monitor,
-        radar: {
-          x: monitor.x + monitor.width + gap,
-          y: monitor.y,
-          width: radarSize,
-          height: radarSize
-        }
+        radar: radar,
+        joystick: joystickUnderRow(monitor, radar)
+      };
+    }
+
+    // Centered under the monitor and radar, with a gap so it does not touch them.
+    function joystickUnderRow(monitor, radar) {
+      const rowLeft = monitor.x;
+      const rowRight = radar.x + radar.width;
+      const rowBottom = monitor.y + Math.max(monitor.height, radar.height);
+      let size = JOYSTICK_SIZE;
+      const rowWidth = Math.max(1, rowRight - rowLeft);
+      if (size > rowWidth) size = rowWidth;
+      const roomBottom = canvas.height - 16;
+      if (rowBottom + JOYSTICK_GAP + size > roomBottom) {
+        size = roomBottom - rowBottom - JOYSTICK_GAP;
+      }
+      if (size < 24) size = 24;
+      return {
+        x: rowLeft + (rowWidth - size) / 2,
+        y: rowBottom + JOYSTICK_GAP,
+        width: size,
+        height: size
       };
     }
 
@@ -374,6 +465,10 @@
 
     function getRadarRect(room) {
       return getStationLayout(room).radar;
+    }
+
+    function getJoystickRect(room) {
+      return getStationLayout(room).joystick;
     }
 
     // Square around the palm. Fingers are outside this box on purpose.
@@ -444,6 +539,75 @@
       const ownerIndex = player === player1 ? 0 : 1;
       drawRadarPicture(screenX, screenY, screenW, screenH, ownerIndex, false);
       drawRedPing(rect, ownerIndex);
+    }
+
+    // Plate, stick, and knob. tiltX is right. tiltY is battlefield up. Each is about -1 to 1.
+    function drawStick(cx, cy, reach, knobR, tiltX, tiltY, stickWidth) {
+      const knobX = cx + tiltX * reach;
+      const knobY = cy - tiltY * reach;
+      ctx.save();
+      ctx.strokeStyle = COLOR_JOYSTICK_STICK;
+      ctx.lineWidth = stickWidth;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(knobX, knobY);
+      ctx.stroke();
+      ctx.fillStyle = COLOR_JOYSTICK_KNOB;
+      ctx.beginPath();
+      ctx.arc(knobX, knobY, knobR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawJoystickPlate(rect, near) {
+      ctx.fillStyle = near ? COLOR_MONITOR_GLOW : COLOR_MONITOR_FRAME;
+      ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+      const cx = rect.x + rect.width / 2;
+      const cy = rect.y + rect.height / 2;
+      ctx.fillStyle = COLOR_JOYSTICK_WELL;
+      ctx.beginPath();
+      ctx.arc(cx, cy, rect.width * JOYSTICK_WELL_RATIO / 2, 0, Math.PI * 2);
+      ctx.fill();
+      return { cx: cx, cy: cy };
+    }
+
+    // Small station in the room. The stick here is only a picture. It does not tilt.
+    function drawJoystick(room, player) {
+      const rect = getJoystickRect(room);
+      const near = stationNearHand(player, room) === "joystick";
+      const spot = drawJoystickPlate(rect, near);
+      drawStick(
+        spot.cx,
+        spot.cy,
+        rect.width * JOYSTICK_STICK_RATIO,
+        rect.width * JOYSTICK_KNOB_RATIO,
+        0,
+        JOYSTICK_ICON_LEAN,
+        Math.max(3, rect.width * 0.07)
+      );
+    }
+
+    // Big stick while the panel is open. No keys means the knob sits in the center.
+    function drawBigJoystick(player, screenX, screenY, screenW, screenH) {
+      const size = Math.min(screenW, screenH) * 0.72;
+      const rect = {
+        x: screenX + (screenW - size) / 2,
+        y: screenY + (screenH - size) / 2,
+        width: size,
+        height: size
+      };
+      const spot = drawJoystickPlate(rect, false);
+      const tilt = battlefieldStick(player);
+      drawStick(
+        spot.cx,
+        spot.cy,
+        size * JOYSTICK_STICK_RATIO,
+        size * JOYSTICK_KNOB_RATIO,
+        tilt.x,
+        tilt.y,
+        Math.max(6, size * 0.035)
+      );
     }
 
     // Small square in the bottom-right bezel. Size follows the frame thickness.
@@ -716,20 +880,25 @@
       return x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height;
     }
 
-    // Only one station per player. If the hand is near both, the closer center wins.
+    // Only one station per player. If the hand is near more than one, the closer center wins.
     function stationNearHand(player, room) {
-      const monitor = getMonitorRect(room);
-      const radar = getRadarRect(room);
-      const monitorNear = handIsNearMonitor(player, monitor);
-      const radarNear = handIsNearMonitor(player, radar);
-      if (monitorNear && radarNear) {
-        const monitorDist = distanceFromHandCenter(player, monitor);
-        const radarDist = distanceFromHandCenter(player, radar);
-        return monitorDist <= radarDist ? "monitor" : "radar";
+      const stations = [
+        { kind: "monitor", rect: getMonitorRect(room) },
+        { kind: "radar", rect: getRadarRect(room) },
+        { kind: "joystick", rect: getJoystickRect(room) }
+      ];
+      let bestKind = "";
+      let bestDist = 0;
+      for (let i = 0; i < stations.length; i++) {
+        const station = stations[i];
+        if (!handIsNearMonitor(player, station.rect)) continue;
+        const dist = distanceFromHandCenter(player, station.rect);
+        if (bestKind === "" || dist < bestDist) {
+          bestKind = station.kind;
+          bestDist = dist;
+        }
       }
-      if (monitorNear) return "monitor";
-      if (radarNear) return "radar";
-      return "";
+      return bestKind;
     }
 
     // Open the station the hand is near. Press the same key again to close.
@@ -764,6 +933,8 @@
       ctx.fillRect(screenX, screenY, screenW, screenH);
       if (player.panelKind === "radar") {
         drawBigRadar(player, screenX, screenY, screenW, screenH);
+      } else if (player.panelKind === "joystick") {
+        drawBigJoystick(player, screenX, screenY, screenW, screenH);
       } else {
         drawMessageList(player, screenX, screenY, screenW, screenH, ZOOM_FONT_SIZE, ZOOM_LINE_HEIGHT);
       }
@@ -966,7 +1137,7 @@
     }
 
     // Circle vs rectangle (building) and circle vs circle (tower).
-    // Future battlefield movement must use this so a player cannot walk through an obstacle.
+    // Joystick movement uses this so a player cannot walk through an obstacle.
     function collidesWithObstacle(x, y, radius) {
       const obstacles = battlefield.obstacles || [];
       for (let i = 0; i < obstacles.length; i++) {
@@ -984,6 +1155,10 @@
 
     const battlefield = makeBattlefield();
     const battlefieldChannel = new BroadcastChannel(BATTLEFIELD_CHANNEL_NAME);
+    let battlefieldDirty = false;
+    let lastBattlefieldPublish = 0;
+    let player1WasMoving = false;
+    let player2WasMoving = false;
 
     // Save the map and tell any open viewer tab. Call this again if the map changes.
     function publishBattlefield() {
@@ -993,6 +1168,15 @@
         // The room still works if the browser blocks storage.
       }
       battlefieldChannel.postMessage({ type: "state", battlefield: battlefield });
+    }
+
+    // Positions change every frame while driving. Send them about 10 times a second.
+    function flushBattlefield(time, force) {
+      if (!battlefieldDirty) return;
+      if (!force && time - lastBattlefieldPublish < STATE_PUBLISH_SECONDS * 1000) return;
+      publishBattlefield();
+      battlefieldDirty = false;
+      lastBattlefieldPublish = time;
     }
 
     battlefieldChannel.onmessage = function (event) {
