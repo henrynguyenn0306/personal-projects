@@ -28,55 +28,89 @@
     const WAITING_TEXT = "> Sys: Awaiting operators...";
     // H.O.W.L.E.R = Heavy Ordnance Weapon, Launch-Equation Ranged (said "Howler")
     const MACHINE_NAME = "H.O.W.L.E.R";
-    // Drawn hand. The hitbox is a square around the palm. Fingers may stick out.
+    // Drawn hand. The hitbox is a square around the palm center. Fingers may stick out.
     const PALM_RADIUS = 13;
     const HAND_HITBOX_HALF = PALM_RADIUS;
-    // Four fingers across the top and a thicker thumb on the side. Offsets are fractions of the palm.
-    const FINGER_RADIUS = PALM_RADIUS * 0.36;
-    const THUMB_RADIUS = PALM_RADIUS * 0.44;
-    const FINGER_SPOTS = [
-      { x: PALM_RADIUS * -0.78, y: PALM_RADIUS * -0.95, r: FINGER_RADIUS },
-      { x: PALM_RADIUS * -0.28, y: PALM_RADIUS * -1.12, r: FINGER_RADIUS },
-      { x: PALM_RADIUS * 0.28, y: PALM_RADIUS * -1.12, r: FINGER_RADIUS },
-      { x: PALM_RADIUS * 0.78, y: PALM_RADIUS * -0.95, r: FINGER_RADIUS },
-      { x: PALM_RADIUS * -1.05, y: PALM_RADIUS * 0.22, r: THUMB_RADIUS }
-    ];
-    // Holding pose: fingers curl in and shrink, but still peek past the palm edge.
-    const HOLD_FINGER_RADIUS_RATIO = 0.7;
-    const HOLD_FINGER_PULL = 0.8;
-    // Pointing pose, used only while that player's zoom window is open.
-    // Pixel link-hand shape. 0 is empty. Every other cell is the player's flat color.
-    // The hotspot is the index tip. The cursor is as tall as the open hand.
+    // Pixel cursors, shared by both players. 0 empty, 1 black outline, 2 white, 3 player cuff.
+    // Both players face the same way. The cell size keeps each pose near the old palm's size.
+    const HAND_CELL = 2;
+    const HAND_OUTLINE = "#000000";
+    const HAND_FILL = "#ffffff";
     const POINT_PRESS_DOWN_SECONDS = 0.12;
     const POINT_PRESS_UP_SECONDS = 0.12;
     const POINT_PRESS_SCALE = 0.86;
-    const POINT_PRESS_SHIFT = 5; // pixels the hand drops during the press
-    const POINT_HOT_COL = 5;
-    const POINT_HOT_ROW = 0;
-    // Top of the open hand's tallest finger, measured from the palm center.
-    const HAND_TIP_OFFSET_Y = -(PALM_RADIUS * 1.12 + FINGER_RADIUS);
-    const POINT_HAND_BITMAP = [
-      "0000010000000000",
-      "0000121000000000",
-      "0000121000000000",
-      "0000121000000000",
-      "0000121000000000",
-      "0000121000000000",
-      "0000121110000000",
-      "0000121210000000",
-      "0000121211100000",
-      "0000121212100000",
-      "0111121212111000",
-      "1211121212121000",
-      "1221121212121000",
-      "0122222222221000",
-      "0122222222221000",
-      "0012222222221000",
-      "0001222222210000",
-      "0000122222100000",
-      "0000133333100000",
-      "0000011111000000"
-    ];
+    const POINT_PRESS_SHIFT = 5; // pixels the pointing hand drops during a tap
+    // Pointer hotspot is the index fingertip. Open and grab hotspots are the palm center.
+    const POINTER_HAND = {
+      hotCol: 5,
+      hotRow: 0,
+      rows: [
+        "0000010000000000",
+        "0000121000000000",
+        "0000121000000000",
+        "0000121000000000",
+        "0000121000000000",
+        "0000121000000000",
+        "0000121110000000",
+        "0000121210000000",
+        "0000121211100000",
+        "0000121212100000",
+        "0111121212111000",
+        "1211121212121000",
+        "1221121212121000",
+        "0122222222221000",
+        "0122222222221000",
+        "0012222222221000",
+        "0001222222210000",
+        "0000122222100000",
+        "0000133333100000",
+        "0000011111000000"
+      ]
+    };
+    const OPEN_HAND = {
+      hotCol: 10,
+      hotRow: 11,
+      tipCol: 5,
+      tipRow: 0,
+      rows: [
+        "00001110111011101110",
+        "00001210121012101210",
+        "00001210121012101210",
+        "00001210121012101210",
+        "00001210121012101210",
+        "00001210121012101210",
+        "11001210121012101210",
+        "12101210121012101210",
+        "12101210121012101211",
+        "12211222222222222211",
+        "01222222222222222221",
+        "00122222222222222210",
+        "00012222222222222100",
+        "00001222222222221000",
+        "00000122222222210000",
+        "00000013333333100000",
+        "00000001111111000000"
+      ]
+    };
+    const GRAB_HAND = {
+      hotCol: 9,
+      hotRow: 6,
+      rows: [
+        "00111011101110111000",
+        "00121012101210121000",
+        "00121012101210121000",
+        "00121112111211121100",
+        "01122222222222222110",
+        "11222222222222222210",
+        "12222222222222222210",
+        "12222222222222222210",
+        "01222222222222222100",
+        "00122222222222221000",
+        "00012222222222210000",
+        "00001333333333100000",
+        "00000111111111000000"
+      ]
+    };
     const INTERACT_KEY_P1 = "e";
     const INTERACT_KEY_P2 = "Enter";
     // Shift+B opens the hidden battlefield viewer. Nothing in the room mentions it.
@@ -585,25 +619,35 @@
       player2WasMoving = moved2;
     }
 
-    function drawHand(hand, color) {
-      ctx.fillStyle = color;
-      const holding = hand.panelOpen || hand.gripping || hand.holdingStart;
-      const pull = holding ? HOLD_FINGER_PULL : 1;
-      const sizeRatio = holding ? HOLD_FINGER_RADIUS_RATIO : 1;
-
-      // Fingers are only drawn. They are not part of the hitbox.
-      // The palm is drawn after them, so a held finger peeks past the edge.
-      for (let i = 0; i < FINGER_SPOTS.length; i++) {
-        const spot = FINGER_SPOTS[i];
-        ctx.beginPath();
-        ctx.arc(hand.x + spot.x * pull, hand.y + spot.y * pull, spot.r * sizeRatio, 0, Math.PI * 2);
-        ctx.fill();
+    // Crisp squares. The hotspot cell sits on hotX, hotY. scale is 1 except during a tap.
+    function drawPixelHand(hotX, hotY, pose, color, scale) {
+      const cell = HAND_CELL;
+      const rows = pose.rows;
+      const originX = hotX - (pose.hotCol + 0.5) * cell;
+      const originY = hotY - (pose.hotRow + 0.5) * cell;
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.translate(hotX, hotY);
+      ctx.scale(scale, scale);
+      ctx.translate(-hotX, -hotY);
+      for (let y = 0; y < rows.length; y++) {
+        const row = rows[y];
+        for (let x = 0; x < row.length; x++) {
+          const pixel = row.charAt(x);
+          if (pixel === "0") continue;
+          if (pixel === "1") ctx.fillStyle = HAND_OUTLINE;
+          else if (pixel === "3") ctx.fillStyle = color;
+          else ctx.fillStyle = HAND_FILL;
+          ctx.fillRect(originX + x * cell, originY + y * cell, cell, cell);
+        }
       }
+      ctx.restore();
+    }
 
-      // Palm
-      ctx.beginPath();
-      ctx.arc(hand.x, hand.y, PALM_RADIUS, 0, Math.PI * 2);
-      ctx.fill();
+    // Open while the hand is free. A fist while it grips the stick or holds the start button.
+    function drawHand(hand, color) {
+      const pose = (hand.gripping || hand.holdingStart) ? GRAB_HAND : OPEN_HAND;
+      drawPixelHand(hand.x, hand.y, pose, color, 1);
     }
 
     // 0 at rest, 1 at the bottom of the press, then back to 0.
@@ -617,43 +661,34 @@
       return linear * linear * (3 - 2 * linear);
     }
 
-    // How tall the open hand is, from the highest fingertip to the bottom of the palm.
-    function openHandHeight() {
-      let top = -PALM_RADIUS;
-      let bottom = PALM_RADIUS;
-      for (let i = 0; i < FINGER_SPOTS.length; i++) {
-        const spot = FINGER_SPOTS[i];
-        if (spot.y - spot.r < top) top = spot.y - spot.r;
-        if (spot.y + spot.r > bottom) bottom = spot.y + spot.r;
-      }
-      return bottom - top;
+    // Screen offset from the open palm center to the index fingertip.
+    function openTipOffset() {
+      return {
+        x: (OPEN_HAND.tipCol - OPEN_HAND.hotCol) * HAND_CELL,
+        y: (OPEN_HAND.tipRow - OPEN_HAND.hotRow) * HAND_CELL
+      };
     }
 
-    // One bitmap cell. The whole cursor is as tall as the open hand, then shrinks on a tap.
-    function pointingCell(press) {
-      const cell = openHandHeight() / POINT_HAND_BITMAP.length;
-      return cell * (1 - (1 - POINT_PRESS_SCALE) * press);
-    }
-
-    // Keep the whole cursor inside this player's half. The hotspot is the fingertip.
+    // Keep the whole pointer inside this player's half. The hotspot is the fingertip.
     function clampPointingHand(player, room) {
-      const cell = pointingCell(0);
-      const cols = POINT_HAND_BITMAP[0].length;
-      const rows = POINT_HAND_BITMAP.length;
-      let minX = room.left + POINT_HOT_COL * cell;
-      let maxX = room.right - (cols - 1 - POINT_HOT_COL) * cell;
-      let minY = POINT_HOT_ROW * cell;
-      let maxY = canvas.height - (rows - 1 - POINT_HOT_ROW) * cell;
+      const cell = HAND_CELL;
+      const cols = POINTER_HAND.rows[0].length;
+      const rows = POINTER_HAND.rows.length;
+      let minX = room.left + POINTER_HAND.hotCol * cell;
+      let maxX = room.right - (cols - 1 - POINTER_HAND.hotCol) * cell;
+      let minY = POINTER_HAND.hotRow * cell;
+      let maxY = canvas.height - (rows - 1 - POINTER_HAND.hotRow) * cell;
       if (minX > maxX) player.pointX = (room.left + room.right) / 2;
       else player.pointX = clampNumber(player.pointX, minX, maxX);
       if (minY > maxY) player.pointY = canvas.height / 2;
       else player.pointY = clampNumber(player.pointY, minY, maxY);
     }
 
-    // Palm center for an open hand whose tallest fingertip is the pointing hotspot.
+    // Put the open palm back under the pointing fingertip.
     function parkHandUnderTip(player, room) {
-      player.x = player.pointX;
-      player.y = player.pointY - HAND_TIP_OFFSET_Y;
+      const tip = openTipOffset();
+      player.x = player.pointX - tip.x;
+      player.y = player.pointY - tip.y;
       clampHand(player, room);
     }
 
@@ -666,9 +701,10 @@
         return;
       }
       if (!player.pointReady) {
-        // Start on the fingertip the open hand already had, so the pose change does not jump.
-        player.pointX = player.x;
-        player.pointY = player.y + HAND_TIP_OFFSET_Y;
+        // Start on the open hand's index tip, so the pose change does not jump.
+        const tip = openTipOffset();
+        player.pointX = player.x + tip.x;
+        player.pointY = player.y + tip.y;
         player.pointReady = true;
       }
       player.pointX += dir.x * HAND_SPEED * dt;
@@ -677,26 +713,13 @@
       if (player.panelKind === "fire") player.fireIndex = keyUnderPoint(player, room);
     }
 
-    // Pixel pointing pose, filled and shaded like the open hand.
+    // Pointing pose while a zoom window is open. A tap shrinks it around the fingertip.
     function drawPointingHand(hand, color) {
       if (!hand.pointReady) return;
       const press = pointPressAmount(hand);
-      const cell = pointingCell(press);
-      const tipX = hand.pointX;
+      const scale = 1 - (1 - POINT_PRESS_SCALE) * press;
       const tipY = hand.pointY + POINT_PRESS_SHIFT * press;
-      const originX = tipX - (POINT_HOT_COL + 0.5) * cell;
-      const originY = tipY - (POINT_HOT_ROW + 0.5) * cell;
-      ctx.save();
-      ctx.imageSmoothingEnabled = false;
-      ctx.fillStyle = color;
-      for (let y = 0; y < POINT_HAND_BITMAP.length; y++) {
-        const row = POINT_HAND_BITMAP[y];
-        for (let x = 0; x < row.length; x++) {
-          if (row.charAt(x) === "0") continue;
-          ctx.fillRect(originX + x * cell, originY + y * cell, cell, cell);
-        }
-      }
-      ctx.restore();
+      drawPixelHand(hand.pointX, tipY, POINTER_HAND, color, scale);
     }
 
     function drawLabel(text, room) {
