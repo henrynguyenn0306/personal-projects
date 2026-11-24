@@ -748,15 +748,17 @@
       player.pointX += dir.x * HAND_SPEED * dt;
       player.pointY += dir.y * HAND_SPEED * dt;
       clampPointingHand(player, room);
-      if (player.panelKind === "fire") {
+      if (player.panelKind === "turret") {
         const hit = dialUnderPoint(player, room);
         player.dialHover = hit;
-        player.fireIndex = hit ? -1 : keyUnderPoint(player, room);
         if (player.dialDrag) {
           const key = player === player1 ? INTERACT_KEY_P1 : INTERACT_KEY_P2;
           if (keys[key]) applyDialDrag(player, room);
           else player.dialDrag = false;
         }
+      } else if (player.panelKind === "fire") {
+        player.dialHover = "";
+        player.fireIndex = keyUnderPoint(player, room);
       }
     }
 
@@ -1536,7 +1538,7 @@
     // Keypad cell under the fingertip, or -1 when the tip is somewhere else.
     function keyUnderPoint(player, room) {
       if (player.panelKind !== "fire") return -1;
-      const pad = zoomContent(room).keypad;
+      const pad = zoomContent(room, "fire").keypad;
       const padRect = { x: pad.x, y: pad.y, width: pad.width, height: pad.height };
       if (!pointInRect(player.pointX, player.pointY, padRect)) return -1;
       const cells = fireKeyCells(pad);
@@ -2601,8 +2603,8 @@
     }
 
     function dialUnderPoint(player, room) {
-      if (player.panelKind !== "fire") return "";
-      const dial = zoomContent(room).dial;
+      if (player.panelKind !== "turret") return "";
+      const dial = zoomContent(room, "turret").dial;
       if (!dial) return "";
       const parts = turretDialParts(dial, true);
       const tipX = player.pointX;
@@ -2614,25 +2616,192 @@
     }
 
     function applyDialDrag(player, room) {
-      const dial = zoomContent(room).dial;
+      const dial = zoomContent(room, "turret").dial;
       if (!dial) return;
       const parts = turretDialParts(dial, true);
       setTurretAngle(player, angleFromPointer(parts.cx, parts.cy, player.pointX, player.pointY));
     }
 
+    // Axis meters. x runs across from the top-left corner. y runs down.
+    function axisFromGame(gameX, gameY) {
+      return {
+        x: gameX + FIELD_X_MAX,
+        y: FIELD_Y_MAX - gameY
+      };
+    }
+
+    function mapPoint(plot, axisX, axisY) {
+      const spanX = FIELD_X_MAX * 2;
+      const spanY = FIELD_Y_MAX * 2;
+      return {
+        x: plot.x + (axisX / spanX) * plot.w,
+        y: plot.y + (axisY / spanY) * plot.h
+      };
+    }
+
+    // Fit the 240 by 200 field inside the box. Labels need a margin on the big map.
+    function battlefieldMapPlot(box, withLabels) {
+      const padL = withLabels ? 32 : 3;
+      const padR = withLabels ? 10 : 3;
+      const padT = withLabels ? 8 : 3;
+      const padB = withLabels ? 20 : 3;
+      const availW = Math.max(8, box.width - padL - padR);
+      const availH = Math.max(8, box.height - padT - padB);
+      const aspect = (FIELD_X_MAX * 2) / (FIELD_Y_MAX * 2);
+      let w = availW;
+      let h = w / aspect;
+      if (h > availH) {
+        h = availH;
+        w = h * aspect;
+      }
+      return {
+        x: box.x + padL + (availW - w) / 2,
+        y: box.y + padT + (availH - h) / 2,
+        w: w,
+        h: h
+      };
+    }
+
+    // Future attack marks. Each one will be { x, y } in axis meters.
+    // A press on a mark shows its distance, and a delete button removes it.
+    // The list stays empty until that is built.
+    function attackMarksOf(player) {
+      if (!player || !player.attackMarks) return [];
+      return player.attackMarks;
+    }
+
+    function drawAttackMarks(plot, player) {
+      const marks = attackMarksOf(player);
+      for (let i = 0; i < marks.length; i++) {
+        const spot = mapPoint(plot, marks[i].x, marks[i].y);
+        ctx.fillStyle = "#ffb020";
+        ctx.beginPath();
+        ctx.arc(spot.x, spot.y, Math.max(3, plot.w * 0.012), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function attackMarkUnderPoint(plot, player, x, y) {
+      const marks = attackMarksOf(player);
+      const reach = Math.max(8, plot.w * 0.02);
+      for (let i = marks.length - 1; i >= 0; i--) {
+        const spot = mapPoint(plot, marks[i].x, marks[i].y);
+        if (Math.hypot(x - spot.x, y - spot.y) <= reach) return i;
+      }
+      return -1;
+    }
+
+    // Top-down field. No machines and no firing arcs.
+    function drawBattlefieldMap(box, withLabels, player) {
+      const plot = battlefieldMapPlot(box, withLabels);
+      const spanX = FIELD_X_MAX * 2;
+      const spanY = FIELD_Y_MAX * 2;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(box.x, box.y, box.width, box.height);
+      ctx.clip();
+      ctx.fillStyle = "#04140a";
+      ctx.fillRect(box.x, box.y, box.width, box.height);
+      ctx.fillStyle = "#071c10";
+      ctx.fillRect(plot.x, plot.y, plot.w, plot.h);
+
+      ctx.strokeStyle = "rgba(180, 220, 196, 0.28)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let meters = 20; meters < spanX - 0.01; meters += 20) {
+        const top = mapPoint(plot, meters, 0);
+        const bottom = mapPoint(plot, meters, spanY);
+        ctx.moveTo(top.x, top.y);
+        ctx.lineTo(bottom.x, bottom.y);
+      }
+      for (let meters = 20; meters < spanY - 0.01; meters += 20) {
+        const left = mapPoint(plot, 0, meters);
+        const right = mapPoint(plot, spanX, meters);
+        ctx.moveTo(left.x, left.y);
+        ctx.lineTo(right.x, right.y);
+      }
+      ctx.stroke();
+
+      const obstacles = battlefield.obstacles || [];
+      for (let i = 0; i < obstacles.length; i++) {
+        const obstacle = obstacles[i];
+        const center = axisFromGame(obstacle.x, obstacle.y);
+        if (obstacle.type === "tower") {
+          const spot = mapPoint(plot, center.x, center.y);
+          const radius = Math.max(1, (obstacle.r || 2) / spanX * plot.w);
+          ctx.fillStyle = "#c8c8d2";
+          ctx.beginPath();
+          ctx.arc(spot.x, spot.y, radius, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          const wide = obstacle.w || 6;
+          const deep = obstacle.h || 6;
+          const corner = mapPoint(plot, center.x - wide / 2, center.y - deep / 2);
+          ctx.fillStyle = "#8a8a96";
+          ctx.fillRect(corner.x, corner.y, wide / spanX * plot.w, deep / spanY * plot.h);
+        }
+      }
+
+      ctx.strokeStyle = "rgba(216, 255, 228, 0.9)";
+      ctx.lineWidth = withLabels ? 1.5 : 1;
+      ctx.strokeRect(plot.x + 0.5, plot.y + 0.5, Math.max(1, plot.w - 1), Math.max(1, plot.h - 1));
+
+      const origin = mapPoint(plot, 0, 0);
+      const arm = Math.max(3, Math.min(8, plot.w * 0.035));
+      ctx.strokeStyle = "#ff5555";
+      ctx.lineWidth = withLabels ? 2 : 1.5;
+      ctx.beginPath();
+      ctx.moveTo(origin.x, origin.y);
+      ctx.lineTo(origin.x + arm, origin.y);
+      ctx.moveTo(origin.x, origin.y);
+      ctx.lineTo(origin.x, origin.y + arm);
+      ctx.stroke();
+
+      if (withLabels) {
+        const fontPx = plot.w > 320 ? 12 : 10;
+        ctx.font = fontPx + "px monospace";
+        ctx.fillStyle = COLOR_RADAR_YOU;
+        ctx.textBaseline = "top";
+        for (let meters = 0; meters <= spanX + 0.01; meters += 20) {
+          const at = mapPoint(plot, meters, spanY);
+          ctx.textAlign = meters <= 0.01 ? "left" : (meters >= spanX - 0.01 ? "right" : "center");
+          ctx.fillText(String(meters), at.x, plot.y + plot.h + 3);
+        }
+        ctx.textAlign = "right";
+        ctx.textBaseline = "middle";
+        for (let meters = 0; meters <= spanY + 0.01; meters += 20) {
+          const at = mapPoint(plot, 0, meters);
+          ctx.fillText(String(meters), plot.x - 4, at.y);
+        }
+        drawAttackMarks(plot, player);
+      }
+      ctx.restore();
+      return plot;
+    }
+
+    // Equation and graph on the left. Dial above the map on the right.
     function stationFireLayout(rect) {
       const innerX = rect.x + 10;
       const innerY = rect.y + 10;
       const innerW = Math.max(20, rect.width - 20);
       const innerBottom = rect.y + rect.height - 26;
       const innerH = Math.max(20, innerBottom - innerY);
-      const eqH = Math.max(22, Math.min(32, innerH * 0.18));
-      const noteH = 14;
-      const rowY = innerY + eqH + noteH + 6;
-      const rowH = Math.max(16, innerBottom - rowY);
       const gap = 6;
-      let dialW = Math.min(rowH, Math.max(52, innerW * 0.34));
-      if (innerW - dialW - gap < 64) dialW = Math.max(40, innerW - gap - 64);
+      let sideW = Math.round(Math.min(innerH * 0.46, Math.max(64, innerW * 0.36)));
+      if (innerW - sideW - gap < 88) sideW = Math.max(52, innerW - gap - 88);
+      const leftW = Math.max(40, innerW - sideW - gap);
+      const eqH = Math.max(20, Math.min(28, innerH * 0.15));
+      const noteH = 14;
+      const graphY = innerY + eqH + noteH + 4;
+      const graphH = Math.max(16, innerY + innerH - graphY);
+      const stackGap = 5;
+      let dialH = Math.min(sideW + 8, Math.max(44, (innerH - stackGap) * 0.52));
+      let mapH = innerH - dialH - stackGap;
+      if (mapH < 36) {
+        dialH = Math.max(40, innerH - stackGap - 36);
+        mapH = innerH - dialH - stackGap;
+      }
+      const sideX = innerX + leftW + gap;
       return {
         innerX: innerX,
         innerY: innerY,
@@ -2640,14 +2809,15 @@
         innerBottom: innerBottom,
         eqH: eqH,
         noteH: noteH,
-        graph: { x: innerX, y: rowY, w: Math.max(16, innerW - dialW - gap), h: rowH },
-        dial: { x: innerX + innerW - dialW, y: rowY, width: dialW, height: rowH }
+        fire: { x: innerX, y: innerY, width: leftW, height: innerH },
+        graph: { x: innerX, y: graphY, w: leftW, h: graphH },
+        dial: { x: sideX, y: innerY, width: sideW, height: dialH },
+        map: { x: sideX, y: innerY + dialH + stackGap, width: sideW, height: Math.max(16, mapH) }
       };
     }
 
     function drawFireStation(room, player) {
       const rect = getFireRect(room);
-      const near = stationNearHand(player, room) === "fire";
       syncEquation(player);
       ctx.save();
       drawBeveledRect(rect);
@@ -2672,26 +2842,36 @@
       ctx.fill();
 
       const body = stationFireLayout(rect);
-      // Dark glass until H.O.W.L.E.R has finished booting. No equation, graph, or dial yet.
+      // Dark glass until H.O.W.L.E.R has finished booting. No equation, graph, dial, or map yet.
       if (!machineStarted) {
         ctx.fillStyle = "#000000";
         ctx.fillRect(body.innerX, body.innerY, body.innerW, Math.max(8, body.innerBottom - body.innerY));
         ctx.restore();
         return;
       }
-      drawEquationField({ x: body.innerX, y: body.innerY, width: body.innerW, height: body.eqH }, player, "12px monospace", false);
+      drawEquationField({ x: body.fire.x, y: body.innerY, width: body.fire.width, height: body.eqH }, player, "12px monospace", false);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(body.fire.x, body.innerY + body.eqH, body.fire.width, body.noteH + 4);
+      ctx.clip();
       ctx.font = "10px monospace";
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
       ctx.fillStyle = player.canFire ? COLOR_MONITOR_TEXT : COLOR_MONITOR_WARNING;
-      ctx.fillText(stationFireNote(player), body.innerX + 4, body.innerY + body.eqH + body.noteH / 2 + 2);
+      ctx.fillText(stationFireNote(player), body.fire.x + 4, body.innerY + body.eqH + body.noteH / 2 + 2);
+      ctx.restore();
 
       if (body.graph.h > 20 && body.graph.w > 20) {
         drawShellGraph(body.graph, player.equationTree, player.flight);
       }
       if (body.dial.width > 24 && body.dial.height > 24) drawTurretDial(body.dial, player, false);
+      if (body.map.width > 16 && body.map.height > 16) drawBattlefieldMap(body.map, false, null);
       ctx.restore();
-      if (near && machineStarted) drawInteractOutline(rect);
+      if (!machineStarted) return;
+      const hot = stationNearHand(player, room);
+      if (hot === "fire") drawInteractOutline(body.fire);
+      else if (hot === "turret") drawInteractOutline(body.dial);
+      else if (hot === "map") drawInteractOutline(body.map);
     }
 
     function fireKeyPlacements() {
@@ -2790,7 +2970,7 @@
       ctx.restore();
     }
 
-    // Equation and readouts on top, graph and dial in the middle, keypad across the bottom.
+    // Equation and readouts on top, the graph in the middle, keypad across the bottom.
     function drawFireZoom(player, view) {
       syncEquation(player);
       drawEquationField(view.equation, player, "16px monospace", true);
@@ -2798,8 +2978,27 @@
       if (view.graph.h > 24 && view.graph.w > 24) {
         drawShellGraph(view.graph, player.equationTree, player.flight, true);
       }
-      if (view.dial.width > 24 && view.dial.height > 24) drawTurretDial(view.dial, player, true);
       drawFireKeys(view.keypad, player);
+    }
+
+    // Big dial. The direction line sits above it. Drag and the arrows still aim the target.
+    function drawTurretZoom(player, view) {
+      const line = view.direction;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(line.x, line.y, line.width, line.height);
+      ctx.clip();
+      ctx.font = "16px monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = COLOR_MONITOR_TEXT;
+      ctx.fillText(directionLine(player), line.x + line.width / 2, line.y + line.height / 2);
+      ctx.restore();
+      if (view.dial.width > 24 && view.dial.height > 24) drawTurretDial(view.dial, player, true);
+    }
+
+    function drawMapZoom(player, view) {
+      drawBattlefieldMap(view.map, true, player);
     }
 
     function interactOutlineStyle() {
@@ -3323,13 +3522,17 @@
     }
 
     // Only one station per player. If the hand is near more than one, the closer center wins.
+    // The fire plate is three regions: the equation, the dial, and the map.
     function stationNearHand(player, room) {
+      const plate = stationFireLayout(getFireRect(room));
       const stations = [
         { kind: "monitor", rect: getMonitorRect(room) },
         { kind: "radar", rect: getRadarRect(room) },
         { kind: "joystick", rect: getJoystickRect(room) },
         { kind: "refuel", rect: getRefuelRect(room) },
-        { kind: "fire", rect: getFireRect(room) }
+        { kind: "fire", rect: plate.fire },
+        { kind: "turret", rect: plate.dial },
+        { kind: "map", rect: plate.map }
       ];
       let bestKind = "";
       let bestDist = 0;
@@ -3387,12 +3590,15 @@
         player.refueling = true;
         return;
       }
-      if (kind === "fire") {
-        player.fireOpen = true;
-        player.fireIndex = -1;
+      if (kind === "fire" || kind === "turret" || kind === "map") {
+        player.dialDrag = false;
         player.panelOpen = true;
-        player.panelKind = "fire";
+        player.panelKind = kind;
         player.pointReady = false;
+        if (kind === "fire") {
+          player.fireOpen = true;
+          player.fireIndex = -1;
+        }
         return;
       }
       player.panelOpen = true;
@@ -3411,21 +3617,27 @@
         return;
       }
       player.pointPressFrom = frameTime;
+      if (player.panelKind === "turret") {
+        const dialHit = dialUnderPoint(player, room);
+        player.pointPressIndex = -1;
+        if (dialHit === "ccw" || dialHit === "cw") {
+          player.dialDrag = false;
+          nudgeTurret(player, dialHit === "ccw" ? -1 : 1);
+          return;
+        }
+        if (dialHit === "face") {
+          player.dialDrag = true;
+          applyDialDrag(player, room);
+        }
+        return;
+      }
+      if (player.panelKind === "map") {
+        player.pointPressIndex = -1;
+        pressMapWindow(player, room);
+        return;
+      }
       if (player.panelKind !== "fire") {
         player.pointPressIndex = -1;
-        return;
-      }
-      const dialHit = dialUnderPoint(player, room);
-      if (dialHit === "ccw" || dialHit === "cw") {
-        player.pointPressIndex = -1;
-        player.dialDrag = false;
-        nudgeTurret(player, dialHit === "ccw" ? -1 : 1);
-        return;
-      }
-      if (dialHit === "face") {
-        player.pointPressIndex = -1;
-        player.dialDrag = true;
-        applyDialDrag(player, room);
         return;
       }
       const keyIndex = keyUnderPoint(player, room);
@@ -3437,12 +3649,21 @@
         return;
       }
       player.pointPressIndex = -1;
-      const equation = zoomContent(room).equation;
+      const equation = zoomContent(room, "fire").equation;
       if (pointInRect(tip.x, tip.y, equation)) player.caret = caretFromPoint(player, tip.x, equation);
     }
 
-    // Screen area inside a zoom frame. Fire control stacks equation, plot, and keypad.
-    function zoomContent(room) {
+    // Read-only until attack marks exist. A press on a future mark is the hook.
+    function pressMapWindow(player, room) {
+      const box = zoomContent(room, "map").map;
+      if (!box) return;
+      const plot = battlefieldMapPlot(box, true);
+      const index = attackMarkUnderPoint(plot, player, player.pointX, player.pointY);
+      if (index < 0) return;
+    }
+
+    // Screen area inside a zoom frame. Fire, turret, and map each fill that same frame.
+    function zoomContent(room, kind) {
       const panel = getZoomRect(room);
       const bezel = Math.min(MONITOR_BEZEL, panel.width / 6, panel.height / 6);
       const screenX = panel.x + bezel;
@@ -3455,6 +3676,42 @@
       const innerY = screenY + inset;
       const innerW = Math.max(40, screenW - inset * 2);
       const innerH = Math.max(40, screenH - inset * 2);
+      const frame = {
+        panel: panel,
+        screenX: screenX,
+        screenY: screenY,
+        screenW: screenW,
+        screenH: screenH
+      };
+      if (kind === "turret") {
+        const dirH = 32;
+        const availH = Math.max(40, innerH - dirH - gap);
+        const size = Math.min(innerW * 0.86, availH);
+        return {
+          panel: frame.panel,
+          screenX: frame.screenX,
+          screenY: frame.screenY,
+          screenW: frame.screenW,
+          screenH: frame.screenH,
+          direction: { x: innerX, y: innerY, width: innerW, height: dirH },
+          dial: {
+            x: innerX + (innerW - size) / 2,
+            y: innerY + dirH + gap,
+            width: size,
+            height: availH
+          }
+        };
+      }
+      if (kind === "map") {
+        return {
+          panel: frame.panel,
+          screenX: frame.screenX,
+          screenY: frame.screenY,
+          screenW: frame.screenW,
+          screenH: frame.screenH,
+          map: { x: innerX, y: innerY, width: innerW, height: innerH }
+        };
+      }
       const eqH = Math.max(26, Math.min(32, innerH * 0.07));
       const infoH = Math.max(36, Math.min(46, innerH * 0.1));
       const keyRows = fireKeyPlacements().rows;
@@ -3466,17 +3723,15 @@
       }
       const infoY = innerY + eqH + 4;
       const midY = infoY + infoH + gap;
-      const half = Math.max(20, (innerW - gap) / 2);
       return {
-        panel: panel,
-        screenX: screenX,
-        screenY: screenY,
-        screenW: screenW,
-        screenH: screenH,
+        panel: frame.panel,
+        screenX: frame.screenX,
+        screenY: frame.screenY,
+        screenW: frame.screenW,
+        screenH: frame.screenH,
         equation: { x: innerX, y: innerY, width: innerW, height: eqH },
         readouts: { x: innerX, y: infoY, width: innerW, height: infoH },
-        graph: { x: innerX, y: midY, w: half, h: Math.max(20, midH) },
-        dial: { x: innerX + half + gap, y: midY, width: half, height: Math.max(20, midH) },
+        graph: { x: innerX, y: midY, w: innerW, h: Math.max(20, midH) },
         keypad: {
           x: innerX,
           y: midY + Math.max(20, midH) + gap,
@@ -3492,12 +3747,14 @@
       ctx.fillStyle = COLOR_ROOM_DIM;
       ctx.fillRect(room.left, 0, room.right - room.left, canvas.height);
 
-      const view = zoomContent(room);
+      const view = zoomContent(room, player.panelKind);
       const panel = view.panel;
       // The close button owns the top-right corner, so that screw is left off.
       let frameLabel = "STATUS";
       if (player.panelKind === "radar") frameLabel = "RADAR";
       if (player.panelKind === "fire") frameLabel = "FIRE";
+      if (player.panelKind === "turret") frameLabel = "TURRET";
+      if (player.panelKind === "map") frameLabel = "MAP";
       drawConsoleFrame(panel, {
         label: frameLabel,
         powerOn: machineStarted,
@@ -3514,6 +3771,10 @@
         drawBigRadar(player, screenX, screenY, screenW, screenH);
       } else if (player.panelKind === "fire") {
         drawFireZoom(player, view);
+      } else if (player.panelKind === "turret") {
+        drawTurretZoom(player, view);
+      } else if (player.panelKind === "map") {
+        drawMapZoom(player, view);
       } else {
         drawMessageList(player, screenX, screenY, screenW, screenH, MONITOR_FONT_SIZE, MONITOR_LINE_HEIGHT);
       }
