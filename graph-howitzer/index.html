@@ -8,13 +8,6 @@
     body { margin: 0; overflow: hidden; background: #14141e; }
     canvas { display: block; width: 100vw; height: 100vh; }
   </style>
-  <script type="importmap">
-    {
-      "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js"
-      }
-    }
-  </script>
 </head>
 <body>
   <canvas id="room"></canvas>
@@ -2030,6 +2023,45 @@
       }
     }
 
+    function graphTickText(value) {
+      if (Math.abs(value) < 1e-6) return "0";
+      const rounded = Math.round(value);
+      if (Math.abs(value - rounded) < 0.05) return String(rounded);
+      return value.toFixed(1);
+    }
+
+    function graphTickValues(min, max) {
+      const span = Math.max(max - min, 1e-6);
+      const step = niceTickStep(span);
+      const values = [];
+      let value = Math.ceil(min / step - 1e-6) * step;
+      for (let n = 0; n < 16 && value <= max + step * 0.02; n++) {
+        let shown = value;
+        if (Math.abs(shown) < step * 0.08) shown = 0;
+        if (shown >= min - step * 0.02 && shown <= max + step * 0.02) values.push(shown);
+        value += step;
+      }
+      return values;
+    }
+
+    // Keep the ticks that name the range. Later ticks give way when the labels would overlap.
+    function graphTicksThatFit(ticks, gap) {
+      const ordered = ticks.slice().sort(function (a, b) { return a.priority - b.priority; });
+      const kept = [];
+      for (let i = 0; i < ordered.length; i++) {
+        const tick = ordered[i];
+        const start = tick.at - tick.size / 2;
+        const end = tick.at + tick.size / 2;
+        let blocked = false;
+        for (let k = 0; k < kept.length; k++) {
+          if (start < kept[k].end + gap && end > kept[k].start - gap) blocked = true;
+        }
+        if (!blocked) kept.push({ start: start, end: end, tick: tick });
+      }
+      return kept.map(function (entry) { return entry.tick; });
+    }
+
+    // Flat plot of the shared trace. x is ground distance, y is height a. Ground stays at 0.
     function drawShellGraph(screen, tree, flight) {
       ctx.save();
       ctx.beginPath();
@@ -2038,29 +2070,44 @@
       ctx.fillStyle = COLOR_RADAR_SCREEN;
       ctx.fillRect(screen.x, screen.y, screen.w, screen.h);
 
-      const padL = 34;
-      const padB = 16;
-      const padT = 6;
-      const padR = 6;
-      const plotX = screen.x + padL;
-      const plotY = screen.y + padT;
-      const plotW = Math.max(8, screen.w - padL - padR);
-      const plotH = Math.max(8, screen.h - padT - padB);
       const points = flight && flight.points ? flight.points : [];
       let yMin = 0;
-      let yMax = 10;
-      let xMax = 10;
+      let yMax = 0;
+      let xMax = 0;
       for (let i = 0; i < points.length; i++) {
         if (points[i].y < yMin) yMin = points[i].y;
         if (points[i].y > yMax) yMax = points[i].y;
         if (points[i].x > xMax) xMax = points[i].x;
       }
       if (flight && flight.peak > yMax) yMax = flight.peak;
-      if (yMax - yMin < 1) yMax = yMin + 10;
+      if (yMin > 0) yMin = 0;
+      if (yMax < 0) yMax = 0;
+      if (xMax < 1) xMax = 10;
+      if (yMax - yMin < 1) {
+        yMax += 5;
+        yMin -= 5;
+      }
       const pad = (yMax - yMin) * 0.08;
       yMin -= pad;
       yMax += pad;
       const ySpan = yMax - yMin;
+
+      const fontPx = screen.h < 170 || screen.w < 220 ? 10 : 13;
+      ctx.font = fontPx + "px monospace";
+      const yValues = graphTickValues(yMin, yMax);
+      let widest = ctx.measureText("a").width;
+      for (let i = 0; i < yValues.length; i++) {
+        const width = ctx.measureText(graphTickText(yValues[i]) + " m").width;
+        if (width > widest) widest = width;
+      }
+      const padL = Math.min(screen.w * 0.34, Math.max(28, widest + 12));
+      const padB = fontPx + 10;
+      const padT = fontPx + 6;
+      const padR = 8;
+      const plotX = screen.x + padL;
+      const plotY = screen.y + padT;
+      const plotW = Math.max(8, screen.w - padL - padR);
+      const plotH = Math.max(8, screen.h - padT - padB);
 
       function px(x) {
         return plotX + (x / xMax) * plotW;
@@ -2069,52 +2116,117 @@
         return plotY + (1 - (y - yMin) / ySpan) * plotH;
       }
 
-      ctx.strokeStyle = COLOR_RADAR_CROSS;
+      ctx.strokeStyle = "rgba(216, 255, 228, 0.4)";
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(px(0), py(yMin));
-      ctx.lineTo(px(0), py(yMax));
+      ctx.moveTo(plotX, plotY);
+      ctx.lineTo(plotX, plotY + plotH);
+      ctx.stroke();
       const groundY = py(0);
-      ctx.moveTo(px(0), groundY);
-      ctx.lineTo(px(xMax), groundY);
+      ctx.strokeStyle = "rgba(57, 255, 106, 0.7)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(plotX, groundY);
+      ctx.lineTo(plotX + plotW, groundY);
       ctx.stroke();
 
       ctx.fillStyle = COLOR_RADAR_YOU;
-      ctx.font = "10px monospace";
-      ctx.textBaseline = "top";
-      const xStep = niceTickStep(xMax);
-      for (let tick = 0; tick <= xMax + xStep * 0.01; tick += xStep) {
-        const shown = Math.abs(tick - xMax) < xStep * 0.2 ? xMax : tick;
-        if (shown > xMax + 0.01) continue;
-        ctx.textAlign = shown === 0 ? "left" : (shown > xMax - xStep * 0.3 ? "right" : "center");
-        const label = Math.abs(shown - Math.round(shown)) < 0.05 ? String(Math.round(shown)) : shown.toFixed(0);
-        ctx.fillText(label + " m", px(Math.min(shown, xMax)), groundY + 2);
+      ctx.font = fontPx + "px monospace";
+      ctx.textAlign = "right";
+      ctx.textBaseline = "bottom";
+      ctx.fillText("a", plotX - 6, plotY - 1);
+
+      const yTicks = [];
+      for (let i = 0; i < yValues.length; i++) {
+        const value = yValues[i];
+        const text = graphTickText(value) + " m";
+        const at = py(value);
+        let priority = 2;
+        if (Math.abs(value) < 1e-6) priority = 0;
+        else if (i === 0 || i === yValues.length - 1) priority = 1;
+        yTicks.push({ value: value, text: text, at: at, size: fontPx, priority: priority });
       }
+      const yKept = graphTicksThatFit(yTicks, 2);
       ctx.textAlign = "right";
       ctx.textBaseline = "middle";
-      const yStep = niceTickStep(yMax - yMin);
-      const first = Math.ceil(yMin / yStep) * yStep;
-      for (let y = first; y <= yMax + yStep * 0.01; y += yStep) {
-        if (Math.abs(y) < yStep * 0.01 && y !== 0) continue;
-        const label = Math.abs(y) < yStep * 0.01 ? 0 : Math.round(y * 1000) / 1000;
-        ctx.fillText(label + " m", plotX - 3, py(y));
+      for (let i = 0; i < yKept.length; i++) {
+        const tick = yKept[i];
+        ctx.strokeStyle = "rgba(216, 255, 228, 0.45)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(plotX - 4, tick.at);
+        ctx.lineTo(plotX, tick.at);
+        ctx.stroke();
+        ctx.fillStyle = COLOR_RADAR_YOU;
+        ctx.fillText(tick.text, plotX - 6, tick.at);
       }
 
-      if (points.length > 1) {
+      const xValues = graphTickValues(0, xMax);
+      const xStep = niceTickStep(Math.max(xMax, 1));
+      if (!xValues.length || Math.abs(xValues[xValues.length - 1] - xMax) > xStep * 0.3) xValues.push(xMax);
+      const xTicks = [];
+      for (let i = 0; i < xValues.length; i++) {
+        const value = Math.min(xMax, xValues[i]);
+        const text = graphTickText(value) + " m";
+        const anchor = px(value);
+        const size = ctx.measureText(text).width;
+        let align = "center";
+        let center = anchor;
+        let priority = 2;
+        if (value <= 0.001) {
+          align = "left";
+          center = anchor + size / 2;
+          priority = 0;
+        } else if (Math.abs(value - xMax) < 0.05) {
+          align = "right";
+          center = anchor - size / 2;
+          priority = 0;
+        }
+        xTicks.push({
+          value: value,
+          text: text,
+          anchor: anchor,
+          at: center,
+          size: size,
+          align: align,
+          priority: priority
+        });
+      }
+      const xKept = graphTicksThatFit(xTicks, 6);
+      const labelY = plotY + plotH + 3;
+      ctx.textBaseline = "top";
+      for (let i = 0; i < xKept.length; i++) {
+        const tick = xKept[i];
+        ctx.strokeStyle = "rgba(216, 255, 228, 0.45)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(tick.anchor, plotY + plotH);
+        ctx.lineTo(tick.anchor, plotY + plotH + 4);
+        ctx.stroke();
+        ctx.fillStyle = COLOR_RADAR_YOU;
+        ctx.textAlign = tick.align;
+        ctx.fillText(tick.text, tick.anchor, labelY);
+      }
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(plotX, plotY, plotW, plotH);
+      ctx.clip();
+      if (points.length > 1 && tree) {
         const runs = GraphHowitzerFire.splitGround(points);
         ctx.lineWidth = 2;
         ctx.strokeStyle = COLOR_MONITOR_TEXT;
         ctx.setLineDash([]);
         strokeGraphRuns(runs.above, px, py);
-        ctx.strokeStyle = "rgba(57, 255, 106, 0.45)";
-        ctx.setLineDash([4, 3]);
+        ctx.strokeStyle = "rgba(57, 255, 106, 0.62)";
+        ctx.setLineDash([5, 4]);
         strokeGraphRuns(runs.below, px, py);
         ctx.setLineDash([]);
       }
       if (flight && flight.impact) {
         const markX = px(flight.distance);
         const markY = py(0);
-        const arm = 5;
+        const arm = screen.h < 170 ? 4 : 6;
         ctx.strokeStyle = "#ffb020";
         ctx.lineWidth = 2;
         ctx.beginPath();
@@ -2127,6 +2239,7 @@
         ctx.lineTo(markX - arm, markY + arm);
         ctx.stroke();
       }
+      ctx.restore();
       ctx.restore();
     }
 
@@ -2270,283 +2383,7 @@
       ctx.restore();
     }
 
-    // Fixed 3D look at this player's arc. Loaded once, drawn only while the zoom is open.
-    let fireThree = null;
-    let fireRenderer = null;
-    const fireScenes = [null, null];
-
-    import("three").then(function (THREE) {
-      fireThree = THREE;
-    }).catch(function () {
-      fireThree = null;
-    });
-
-    function firePlayerIndex(player) {
-      return player === player1 ? 0 : 1;
-    }
-
-    function fireViewSpan(flight) {
-      let reach = 0;
-      let yMax = 0;
-      let yMin = 0;
-      if (flight && flight.points) {
-        for (let i = 0; i < flight.points.length; i++) {
-          const point = flight.points[i];
-          if (point.x > reach) reach = point.x;
-          if (point.y > yMax) yMax = point.y;
-          if (point.y < yMin) yMin = point.y;
-        }
-      }
-      if (yMax < 0) yMax = 0;
-      if (yMin > 0) yMin = 0;
-      const pad = Math.max(2, (yMax - yMin) * 0.12);
-      const yTop = Math.max(8, yMax + pad);
-      const yBot = yMin - pad;
-      const reachOut = Math.max(20, reach * 1.18);
-      // True meters until a long flat curve would collapse into a ribbon.
-      const ySpan = Math.max(4, yTop - yBot);
-      const yScale = Math.max(1, Math.min(6, (reachOut * 0.45) / ySpan));
-      return { reach: reachOut, yMax: yTop, yMin: yBot, yScale: yScale };
-    }
-
-    function fireGridStep(span) {
-      const raw = span / 5;
-      if (!(raw > 0)) return 5;
-      const pow = Math.pow(10, Math.floor(Math.log10(raw)));
-      const n = raw / pow;
-      let step = 10;
-      if (n < 1.5) step = 1;
-      else if (n < 3.5) step = 2;
-      else if (n < 7.5) step = 5;
-      return step * pow;
-    }
-
-    function disposeFireObject(object) {
-      object.traverse(function (child) {
-        if (child.geometry) child.geometry.dispose();
-        if (child.material) {
-          if (child.material.map) child.material.map.dispose();
-          child.material.dispose();
-        }
-      });
-    }
-
-    function clearFireScene(scene) {
-      while (scene.children.length > 0) {
-        const child = scene.children[scene.children.length - 1];
-        scene.remove(child);
-        disposeFireObject(child);
-      }
-    }
-
-    function ensureFireScene(index) {
-      if (fireScenes[index]) return fireScenes[index];
-      const THREE = fireThree;
-      if (!fireRenderer) {
-        const canvas = document.createElement("canvas");
-        fireRenderer = new THREE.WebGLRenderer({
-          canvas: canvas,
-          antialias: true,
-          alpha: false,
-          preserveDrawingBuffer: true
-        });
-        fireRenderer.setClearColor(0x04140a, 1);
-      }
-      const scene = new THREE.Scene();
-      const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 2000);
-      fireScenes[index] = { scene: scene, camera: camera, sig: "", reach: 20, yMax: 8, yMin: -2 };
-      return fireScenes[index];
-    }
-
-    function fireSignature(player) {
-      const flight = player.flight;
-      if (!player.equationTree || !flight) return "bad|" + (player.equation || "");
-      const end = flight.impact ? flight.distance : (flight.points.length ? flight.points[flight.points.length - 1].x : 0);
-      return player.equation + "|" + end + "|" + flight.peak + "|" + flight.points.length;
-    }
-
-    // Ground distance runs past the drawn curve. Height fits above and below 0.
-    function fitFireCamera(view) {
-      const THREE = fireThree;
-      const reach = view.reach;
-      const yMax = view.yMax;
-      const yMin = view.yMin;
-      const depth = Math.max(6, reach * 0.22);
-      const midY = (yMax + yMin) * 0.5;
-      const target = new THREE.Vector3(reach * 0.42, midY, 0);
-      const dir = new THREE.Vector3(0.42, 0.78, 1).normalize();
-      const camera = view.camera;
-      const corners = [
-        new THREE.Vector3(0, yMin, -depth),
-        new THREE.Vector3(reach, yMin, -depth),
-        new THREE.Vector3(reach, yMin, depth),
-        new THREE.Vector3(0, yMin, depth),
-        new THREE.Vector3(0, yMax, 0),
-        new THREE.Vector3(reach, yMax, 0),
-        new THREE.Vector3(0, 0, -depth),
-        new THREE.Vector3(reach, 0, depth)
-      ];
-      let dist = Math.max(reach, yMax - yMin) * 1.2;
-      for (let attempt = 0; attempt < 8; attempt++) {
-        camera.far = Math.max(4000, dist * 6);
-        camera.position.copy(target).addScaledVector(dir, dist);
-        camera.lookAt(target);
-        camera.updateProjectionMatrix();
-        camera.updateMatrixWorld(true);
-        let maxNdc = 0;
-        for (let i = 0; i < corners.length; i++) {
-          const ndc = corners[i].clone().project(camera);
-          maxNdc = Math.max(maxNdc, Math.abs(ndc.x), Math.abs(ndc.y));
-        }
-        if (maxNdc < 0.88) return;
-        dist *= Math.max(1.08, maxNdc / 0.8);
-      }
-    }
-
-    function addFireRuns(scene, runs, material, dashed, yScale) {
-      const THREE = fireThree;
-      const scale = yScale || 1;
-      for (let r = 0; r < runs.length; r++) {
-        const run = runs[r];
-        if (run.length < 2) continue;
-        const vectors = [];
-        for (let i = 0; i < run.length; i++) {
-          vectors.push(new THREE.Vector3(run[i].x, run[i].y * scale, 0));
-        }
-        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(vectors), material);
-        if (dashed) line.computeLineDistances();
-        scene.add(line);
-      }
-    }
-
-    function rebuildFireScene(view, player) {
-      const THREE = fireThree;
-      const scene = view.scene;
-      clearFireScene(scene);
-      const span = fireViewSpan(player.flight);
-      const yScale = span.yScale || 1;
-      view.reach = span.reach;
-      view.yMax = span.yMax * yScale;
-      view.yMin = span.yMin * yScale;
-      const reach = span.reach;
-      const yMax = view.yMax;
-      const yMin = view.yMin;
-      const depth = Math.max(6, reach * 0.22);
-      const ground = new THREE.Mesh(
-        new THREE.PlaneGeometry(reach, depth * 2),
-        new THREE.MeshBasicMaterial({
-          color: 0x102818,
-          transparent: true,
-          opacity: 0.45,
-          depthWrite: false,
-          side: THREE.DoubleSide
-        })
-      );
-      ground.rotation.x = -Math.PI / 2;
-      ground.position.set(reach / 2, 0, 0);
-      scene.add(ground);
-
-      const step = fireGridStep(reach);
-      const grid = [];
-      for (let x = 0; x <= reach + 0.01; x += step) {
-        grid.push(x, 0.03, -depth, x, 0.03, depth);
-      }
-      for (let z = -depth; z <= depth + 0.01; z += step) {
-        grid.push(0, 0.03, z, reach, 0.03, z);
-      }
-      const gridGeom = new THREE.BufferGeometry();
-      gridGeom.setAttribute("position", new THREE.Float32BufferAttribute(grid, 3));
-      scene.add(new THREE.LineSegments(gridGeom, new THREE.LineBasicMaterial({ color: 0x2f6a45 })));
-
-      const axis = new THREE.LineBasicMaterial({ color: 0xff5555 });
-      const xAxis = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(0, 0.06, 0),
-        new THREE.Vector3(reach, 0.06, 0)
-      ]);
-      const yAxis = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(0, yMin, 0),
-        new THREE.Vector3(0, yMax, 0)
-      ]);
-      scene.add(new THREE.Line(xAxis, axis));
-      scene.add(new THREE.Line(yAxis, axis));
-      const arrow = new THREE.Mesh(
-        new THREE.ConeGeometry(Math.max(0.25, (yMax - yMin) * 0.035), Math.max(0.8, (yMax - yMin) * 0.08), 12),
-        new THREE.MeshBasicMaterial({ color: 0xff5555 })
-      );
-      arrow.position.set(0, yMax + Math.max(0.4, (yMax - yMin) * 0.04), 0);
-      scene.add(arrow);
-
-      const flight = player.flight;
-      const color = firePlayerIndex(player) === 0 ? COLOR_P1 : COLOR_P2;
-      if (flight && flight.points && flight.points.length > 1) {
-        const runs = GraphHowitzerFire.splitGround(flight.points);
-        const solid = new THREE.LineBasicMaterial({ color: color });
-        const dashed = new THREE.LineDashedMaterial({
-          color: color,
-          transparent: true,
-          opacity: 0.72,
-          dashSize: Math.max(0.6, reach * 0.018),
-          gapSize: Math.max(0.35, reach * 0.01)
-        });
-        addFireRuns(scene, runs.above, solid, false, yScale);
-        addFireRuns(scene, runs.below, dashed, true, yScale);
-      }
-      if (flight && flight.impact && flight.distance !== null) {
-        const size = Math.max(0.35, reach * 0.02);
-        const lift = 0.08;
-        const x = flight.distance;
-        const mark = new THREE.LineBasicMaterial({ color: color });
-        const a = new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(x - size, lift, -size),
-          new THREE.Vector3(x + size, lift, size)
-        ]);
-        const b = new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(x - size, lift, size),
-          new THREE.Vector3(x + size, lift, -size)
-        ]);
-        scene.add(new THREE.Line(a, mark));
-        scene.add(new THREE.Line(b, mark));
-        const ring = new THREE.Mesh(
-          new THREE.RingGeometry(size * 1.15, size * 1.55, 28),
-          new THREE.MeshBasicMaterial({ color: color, side: THREE.DoubleSide })
-        );
-        ring.rotation.x = -Math.PI / 2;
-        ring.position.set(x, 0.05, 0);
-        scene.add(ring);
-      }
-    }
-
-    function drawFireArcView(screen, player) {
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(screen.x, screen.y, screen.w, screen.h);
-      ctx.clip();
-      ctx.fillStyle = COLOR_RADAR_SCREEN;
-      ctx.fillRect(screen.x, screen.y, screen.w, screen.h);
-      if (!fireThree || screen.w < 16 || screen.h < 16) {
-        ctx.restore();
-        return;
-      }
-      const view = ensureFireScene(firePlayerIndex(player));
-      const sig = fireSignature(player);
-      if (view.sig !== sig) {
-        rebuildFireScene(view, player);
-        view.sig = sig;
-      }
-      const width = Math.max(2, Math.floor(screen.w));
-      const height = Math.max(2, Math.floor(screen.h));
-      if (fireRenderer.domElement.width !== width || fireRenderer.domElement.height !== height) {
-        fireRenderer.setSize(width, height, false);
-      }
-      view.camera.aspect = width / height;
-      view.camera.updateProjectionMatrix();
-      fitFireCamera(view);
-      fireRenderer.render(view.scene, view.camera);
-      ctx.drawImage(fireRenderer.domElement, screen.x, screen.y, screen.w, screen.h);
-      ctx.restore();
-    }
-
-    // Left side is the shell arc. Right side is the keypad. Same frame as the monitor zoom.
+    // Left side is the flat shell graph. Right side is the keypad. Same frame as the monitor zoom.
     function drawFireZoom(player, view) {
       syncEquation(player);
       const screenX = view.screenX;
@@ -2559,7 +2396,7 @@
       const graphY = screenY + eq.height + 8;
       const graphH = screenH - eq.height - infoH - 16;
       if (graphH > 24) {
-        drawFireArcView({ x: screenX, y: graphY, w: eq.width, h: graphH }, player);
+        drawShellGraph({ x: screenX, y: graphY, w: eq.width, h: graphH }, player.equationTree, player.flight);
       }
 
       const lines = impactLines(player);
