@@ -31,80 +31,26 @@
     // Drawn hand. The hitbox is a square around the palm center. Fingers may stick out.
     const PALM_RADIUS = 13;
     const HAND_HITBOX_HALF = PALM_RADIUS;
-    // Compact pixel cursors. 0 empty, 1 black outline, 2 fill.
-    // Fingers share that outline, so nothing transparent sits between them.
-    // A white halo is drawn around the outline. Both players face the same way.
-    const HAND_CELL = 2;
-    const HAND_OUTLINE = "#000000";
-    const HAND_HALO = "#ffffff";
+    // Four fingers across the top and a thicker thumb on the side. Offsets are fractions of the palm.
+    // Finger 0 is the index: it sits next to the thumb.
+    const FINGER_RADIUS = PALM_RADIUS * 0.36;
+    const THUMB_RADIUS = PALM_RADIUS * 0.44;
+    const INDEX_FINGER = 0;
+    const FINGER_SPOTS = [
+      { x: PALM_RADIUS * -0.78, y: PALM_RADIUS * -0.95, r: FINGER_RADIUS },
+      { x: PALM_RADIUS * -0.28, y: PALM_RADIUS * -1.12, r: FINGER_RADIUS },
+      { x: PALM_RADIUS * 0.28, y: PALM_RADIUS * -1.12, r: FINGER_RADIUS },
+      { x: PALM_RADIUS * 0.78, y: PALM_RADIUS * -0.95, r: FINGER_RADIUS },
+      { x: PALM_RADIUS * -1.05, y: PALM_RADIUS * 0.22, r: THUMB_RADIUS }
+    ];
+    // Holding pose: fingers curl in and shrink, but still peek past the palm edge.
+    const HOLD_FINGER_RADIUS_RATIO = 0.7;
+    const HOLD_FINGER_PULL = 0.8;
+    // Pointing pose lifts the index straight up, past the open hand's tallest finger.
     const POINT_PRESS_DOWN_SECONDS = 0.12;
     const POINT_PRESS_UP_SECONDS = 0.12;
     const POINT_PRESS_SCALE = 0.86;
     const POINT_PRESS_SHIFT = 5; // pixels the pointing hand drops during a tap
-    // Pointer hotspot is the index fingertip. Open and grab hotspots are the palm center.
-    const POINTER_HAND = {
-      hotCol: 4,
-      hotRow: 0,
-      rows: [
-        "0001110000000000",
-        "0001210000000000",
-        "0001210000000000",
-        "0001210000000000",
-        "0001211100000000",
-        "0001212111000000",
-        "0001212121110000",
-        "0001212121210000",
-        "0001212121210000",
-        "0111212121211100",
-        "0122222222222100",
-        "0122222222222100",
-        "0012222222221000",
-        "0001222222210000",
-        "0000122222100000",
-        "0000011111000000"
-      ]
-    };
-    const OPEN_HAND = {
-      hotCol: 8,
-      hotRow: 9,
-      tipCol: 4,
-      tipRow: 0,
-      rows: [
-        "0001111111110000",
-        "0001212121210000",
-        "0001212121210000",
-        "0001212121210000",
-        "0001212121210000",
-        "0001222222210000",
-        "0012222222221000",
-        "0112222222221100",
-        "0122222222222100",
-        "1122222222222210",
-        "0122222222222100",
-        "0012222222221000",
-        "0001222222210000",
-        "0000122222100000",
-        "0000011111000000"
-      ]
-    };
-    const GRAB_HAND = {
-      hotCol: 7,
-      hotRow: 6,
-      rows: [
-        "0001111111110000",
-        "0001212121210000",
-        "0012222222221000",
-        "0112222222221100",
-        "0122222222222100",
-        "1122222222222210",
-        "1222222222222210",
-        "0122222222222100",
-        "0012222222221000",
-        "0001222222210000",
-        "0000122222100000",
-        "0000011111000000"
-      ]
-    };
     const INTERACT_KEY_P1 = "e";
     const INTERACT_KEY_P2 = "Enter";
     // Shift+B opens the hidden battlefield viewer. Nothing in the room mentions it.
@@ -613,87 +559,69 @@
       player2WasMoving = moved2;
     }
 
-    // A light pastel of the player's color, so the two hands stay easy to tell apart.
-    function handFill(hex) {
-      const n = parseInt(hex.slice(1), 16);
-      const mix = function (channel) {
-        return Math.round(channel + (255 - channel) * 0.62);
+    // Where one digit sits for this pose. "hold" curls every digit. "point" curls all but the index.
+    function placedFinger(index, pose) {
+      const spot = FINGER_SPOTS[index];
+      if (pose === "hold" || (pose === "point" && index !== INDEX_FINGER)) {
+        return {
+          x: spot.x * HOLD_FINGER_PULL,
+          y: spot.y * HOLD_FINGER_PULL,
+          r: spot.r * HOLD_FINGER_RADIUS_RATIO
+        };
+      }
+      return { x: spot.x, y: spot.y, r: spot.r };
+    }
+
+    // Index finger while pointing: same radius as the open finger, stretched straight up.
+    // The root stays inside the palm. The tip clears the other fingers.
+    function pointingIndex() {
+      const spot = FINGER_SPOTS[INDEX_FINGER];
+      const r = spot.r;
+      const reach = Math.sqrt(PALM_RADIUS * PALM_RADIUS - spot.x * spot.x);
+      const openTop = PALM_RADIUS * -1.12 - FINGER_RADIUS;
+      return {
+        x: spot.x,
+        r: r,
+        top: openTop - r,
+        bottom: -reach + r
       };
-      const r = mix((n >> 16) & 255);
-      const g = mix((n >> 8) & 255);
-      const b = mix(n & 255);
-      return "rgb(" + r + "," + g + "," + b + ")";
     }
 
-    function handPixel(rows, x, y) {
-      if (y < 0 || x < 0 || y >= rows.length || x >= rows[0].length) return "0";
-      return rows[y].charAt(x);
+    function drawPointingIndex(palmX, palmY) {
+      const finger = pointingIndex();
+      const x = palmX + finger.x;
+      const r = finger.r;
+      const yTop = palmY + finger.top + r;
+      const yBot = palmY + finger.bottom - r;
+      ctx.beginPath();
+      ctx.arc(x, yTop, r, Math.PI, 0, false);
+      ctx.arc(x, yBot, r, 0, Math.PI, false);
+      ctx.closePath();
+      ctx.fill();
     }
 
-    // One scratch sprite, redrawn for each hand. Nearest-neighbor keeps the tap crisp.
-    let handSprite = null;
-    let handSpriteCtx = null;
-
-    // Crisp squares. The hotspot cell sits on hotX, hotY. scale is 1 except during a tap.
-    function drawPixelHand(hotX, hotY, pose, color, scale) {
-      const cell = HAND_CELL;
-      const rows = pose.rows;
-      const cols = rows[0].length;
-      const pad = 1;
-      const bw = (cols + pad * 2) * cell;
-      const bh = (rows.length + pad * 2) * cell;
-      if (!handSprite || handSprite.width !== bw || handSprite.height !== bh) {
-        handSprite = document.createElement("canvas");
-        handSprite.width = bw;
-        handSprite.height = bh;
-        handSpriteCtx = handSprite.getContext("2d");
-      }
-      const sctx = handSpriteCtx;
-      sctx.clearRect(0, 0, bw, bh);
-      sctx.fillStyle = HAND_HALO;
-      for (let y = -1; y <= rows.length; y++) {
-        for (let x = -1; x <= cols; x++) {
-          if (handPixel(rows, x, y) !== "0") continue;
-          let touch = false;
-          for (let dy = -1; dy <= 1 && !touch; dy++) {
-            for (let dx = -1; dx <= 1; dx++) {
-              const near = handPixel(rows, x + dx, y + dy);
-              if (near === "1" || near === "2") touch = true;
-            }
-          }
-          if (touch) sctx.fillRect((x + pad) * cell, (y + pad) * cell, cell, cell);
+    // Fingers first, then the palm, so a curled digit only peeks past the edge.
+    function drawHandShape(palmX, palmY, color, pose) {
+      ctx.fillStyle = color;
+      for (let i = 0; i < FINGER_SPOTS.length; i++) {
+        if (pose === "point" && i === INDEX_FINGER) {
+          drawPointingIndex(palmX, palmY);
+          continue;
         }
+        const finger = placedFinger(i, pose);
+        ctx.beginPath();
+        ctx.arc(palmX + finger.x, palmY + finger.y, finger.r, 0, Math.PI * 2);
+        ctx.fill();
       }
-      const fill = handFill(color);
-      for (let y = 0; y < rows.length; y++) {
-        const row = rows[y];
-        for (let x = 0; x < row.length; x++) {
-          const pixel = row.charAt(x);
-          if (pixel === "0") continue;
-          sctx.fillStyle = pixel === "1" ? HAND_OUTLINE : fill;
-          sctx.fillRect((x + pad) * cell, (y + pad) * cell, cell, cell);
-        }
-      }
-      const hotPx = (pose.hotCol + pad + 0.5) * cell;
-      const hotPy = (pose.hotRow + pad + 0.5) * cell;
-      let dx = hotX - hotPx * scale;
-      let dy = hotY - hotPy * scale;
-      const dw = bw * scale;
-      const dh = bh * scale;
-      if (scale === 1) {
-        dx = Math.round(dx);
-        dy = Math.round(dy);
-      }
-      ctx.save();
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(handSprite, dx, dy, dw, dh);
-      ctx.restore();
+      ctx.beginPath();
+      ctx.arc(palmX, palmY, PALM_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
     }
 
-    // Open while the hand is free. A fist while it grips the stick or holds the start button.
+    // Open while the hand is free. Curled while it grips the stick or holds the start button.
     function drawHand(hand, color) {
-      const pose = (hand.gripping || hand.holdingStart) ? GRAB_HAND : OPEN_HAND;
-      drawPixelHand(hand.x, hand.y, pose, color, 1);
+      const pose = (hand.gripping || hand.holdingStart) ? "hold" : "open";
+      drawHandShape(hand.x, hand.y, color, pose);
     }
 
     // 0 at rest, 1 at the bottom of the press, then back to 0.
@@ -707,33 +635,55 @@
       return linear * linear * (3 - 2 * linear);
     }
 
-    // Screen offset from the open palm center to the index fingertip.
-    function openTipOffset() {
-      return {
-        x: (OPEN_HAND.tipCol - OPEN_HAND.hotCol) * HAND_CELL,
-        y: (OPEN_HAND.tipRow - OPEN_HAND.hotRow) * HAND_CELL
-      };
+    // From the palm center to the top of the raised index finger.
+    function pointingTipOffset() {
+      const finger = pointingIndex();
+      return { x: finger.x, y: finger.top };
+    }
+
+    // How far the pointing hand sticks out from its fingertip.
+    function pointingExtents() {
+      const tip = pointingTipOffset();
+      let left = -tip.x - PALM_RADIUS;
+      let right = -tip.x + PALM_RADIUS;
+      let up = -tip.y - PALM_RADIUS;
+      let down = -tip.y + PALM_RADIUS;
+      const index = pointingIndex();
+      const indexLeft = index.x - tip.x - index.r;
+      const indexRight = index.x - tip.x + index.r;
+      if (indexLeft < left) left = indexLeft;
+      if (indexRight > right) right = indexRight;
+      if (index.top - tip.y < up) up = index.top - tip.y;
+      if (index.bottom - tip.y > down) down = index.bottom - tip.y;
+      for (let i = 0; i < FINGER_SPOTS.length; i++) {
+        if (i === INDEX_FINGER) continue;
+        const finger = placedFinger(i, "point");
+        const x = finger.x - tip.x;
+        const y = finger.y - tip.y;
+        if (x - finger.r < left) left = x - finger.r;
+        if (x + finger.r > right) right = x + finger.r;
+        if (y - finger.r < up) up = y - finger.r;
+        if (y + finger.r > down) down = y + finger.r;
+      }
+      return { left: left, right: right, up: up, down: down };
     }
 
     // Keep the whole pointer inside this player's half. The hotspot is the fingertip.
     function clampPointingHand(player, room) {
-      const cell = HAND_CELL;
-      const cols = POINTER_HAND.rows[0].length;
-      const rows = POINTER_HAND.rows.length;
-      // The hotspot is the center of its cell, and the halo sticks out one cell.
-      let minX = room.left + (POINTER_HAND.hotCol + 1.5) * cell;
-      let maxX = room.right - (cols - POINTER_HAND.hotCol + 0.5) * cell;
-      let minY = (POINTER_HAND.hotRow + 1.5) * cell;
-      let maxY = canvas.height - (rows - POINTER_HAND.hotRow + 0.5) * cell;
+      const box = pointingExtents();
+      let minX = room.left - box.left;
+      let maxX = room.right - box.right;
+      let minY = -box.up;
+      let maxY = canvas.height - box.down;
       if (minX > maxX) player.pointX = (room.left + room.right) / 2;
       else player.pointX = clampNumber(player.pointX, minX, maxX);
       if (minY > maxY) player.pointY = canvas.height / 2;
       else player.pointY = clampNumber(player.pointY, minY, maxY);
     }
 
-    // Put the open palm back under the pointing fingertip.
+    // Put the palm back where it was under the pointing fingertip.
     function parkHandUnderTip(player, room) {
-      const tip = openTipOffset();
+      const tip = pointingTipOffset();
       player.x = player.pointX - tip.x;
       player.y = player.pointY - tip.y;
       clampHand(player, room);
@@ -748,8 +698,8 @@
         return;
       }
       if (!player.pointReady) {
-        // Start on the open hand's index tip, so the pose change does not jump.
-        const tip = openTipOffset();
+        // The palm stays put. Only the index finger lifts, so the hand does not jump.
+        const tip = pointingTipOffset();
         player.pointX = player.x + tip.x;
         player.pointY = player.y + tip.y;
         player.pointReady = true;
@@ -765,8 +715,15 @@
       if (!hand.pointReady) return;
       const press = pointPressAmount(hand);
       const scale = 1 - (1 - POINT_PRESS_SCALE) * press;
+      const tipX = hand.pointX;
       const tipY = hand.pointY + POINT_PRESS_SHIFT * press;
-      drawPixelHand(hand.pointX, tipY, POINTER_HAND, color, scale);
+      const tip = pointingTipOffset();
+      ctx.save();
+      ctx.translate(tipX, tipY);
+      ctx.scale(scale, scale);
+      ctx.translate(-tipX, -tipY);
+      drawHandShape(tipX - tip.x, tipY - tip.y, color, "point");
+      ctx.restore();
     }
 
     function drawLabel(text, room) {
