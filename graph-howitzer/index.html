@@ -177,7 +177,9 @@
     const EQUATION_PREFIX = "y = ";
     const SHELL_SPEED = 20; // m/s along the path, not along the ground
     const SHELL_STORAGE_COUNT = 9;
-    const SHELL_CARRIED_LENGTH = 78; // carried and falling shell, in pixels
+    const SHELL_CARRIED_LENGTH = 62; // carried and falling shell, in pixels
+    const LOADER_SLOT_COUNT = 3;
+    const LOADER_LOAD_SECONDS = 2;
     const SHELL_CARRY_RATIO = 0.5; // a carried shell slows the room hand to half speed
     const SHELL_RESTOCK_SECONDS = 60;
     const SHELL_FALL_GRAVITY = 1600; // px/s squared; a dropped shell leaves the bottom quickly
@@ -248,8 +250,8 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "", shells: SHELL_STORAGE_COUNT, carryingShell: false, storageClosedAt: null, hatch: 0 };
-    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "", shells: SHELL_STORAGE_COUNT, carryingShell: false, storageClosedAt: null, hatch: 0 };
+    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "", shells: SHELL_STORAGE_COUNT, carryingShell: false, storageClosedAt: null, hatch: 0, loaderSlots: [null, null, null], loaderLocked: false, statusNotice: "" };
+    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "", shells: SHELL_STORAGE_COUNT, carryingShell: false, storageClosedAt: null, hatch: 0, loaderSlots: [null, null, null], loaderLocked: false, statusNotice: "" };
     const fallingShells = [];
 
     // The wall sits in the middle. Each player owns one side of it.
@@ -608,6 +610,8 @@
       if (player2.gripping) placeHandOnKnob(player2, rooms.right);
       updateShellStorage(player1, dt);
       updateShellStorage(player2, dt);
+      updateLoader(player1, dt);
+      updateLoader(player2, dt);
       updateFallingShells(dt);
       if (moved1 || moved2) battlefieldDirty = true;
       // The last small step must be saved even if the throttle window has not ended.
@@ -842,6 +846,8 @@
       drawFireStation(rooms.right, player2);
       drawShellStorage(rooms.left, player1);
       drawShellStorage(rooms.right, player2);
+      drawLoader(rooms.left, player1);
+      drawLoader(rooms.right, player2);
       drawStartButton();
 
       // Room hands sit on the stations. An open window gets its hand afterwards, on top.
@@ -981,13 +987,9 @@
         fireW = inner - joy - fuelW;
       }
       const storageY = top + joy + rowGap;
-      // Wider than the stick column so the larger shell has side room, shorter so the
-      // well hugs it. Same left inset and the same gap under the stick row.
-      let storageW = Math.min(inner, Math.max(joy + fuelW + rowGap, joy * 1.45));
-      let storageH = Math.min(joy * 0.72, Math.max(110, storageW * 0.46));
-      if (canvas.height - (storageY + storageH) < rowGap) {
-        storageH = Math.max(72, canvas.height - storageY - rowGap);
-      }
+      const groupW = joy + fuelW;
+      let bottomH = canvas.height - storageY - rowGap;
+      if (bottomH < 72) bottomH = Math.max(48, canvas.height - storageY - 4);
       return {
         joystick: {
           x: room.left + rowGap,
@@ -1002,11 +1004,19 @@
           width: fireW,
           height: joy
         },
+        // Storage fills the column under the stick and fuel. The loader fills the
+        // column under fire control. The gap between them matches the row above.
         storage: {
           x: room.left + rowGap,
           y: storageY,
-          width: storageW,
-          height: storageH
+          width: groupW,
+          height: bottomH
+        },
+        loader: {
+          x: room.left + rowGap + groupW + rowGap,
+          y: storageY,
+          width: fireW,
+          height: bottomH
         }
       };
     }
@@ -1030,7 +1040,8 @@
         joystick: lower.joystick,
         fuelWidth: lower.fuelWidth,
         fire: lower.fire,
-        storage: lower.storage
+        storage: lower.storage,
+        loader: lower.loader
       };
     }
 
@@ -1088,6 +1099,10 @@
 
     function getStorageRect(room) {
       return getStationLayout(room).storage;
+    }
+
+    function getLoaderRect(room) {
+      return getStationLayout(room).loader;
     }
 
     // Square around the palm. Fingers are outside this box on purpose.
@@ -1607,11 +1622,13 @@
 
     function storageWell(rect) {
       const pad = 10;
+      const footer = Math.min(64, Math.max(40, rect.height * 0.32));
       return {
         x: rect.x + pad,
         y: rect.y + pad,
         w: Math.max(8, rect.width - pad * 2),
-        h: Math.max(8, rect.height - pad - 26)
+        h: Math.max(8, rect.height - pad - footer),
+        footer: footer
       };
     }
 
@@ -1633,19 +1650,64 @@
       }
     }
 
-    function drawRenewingLabel(well) {
-      const label = "Renewing shells in 1 minute";
-      let fontPx = 13;
-      ctx.fillStyle = COLOR_REFUEL_LED;
+    function drawCautionStripes(x, y, w, h) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x, y, w, h);
+      ctx.clip();
+      ctx.fillStyle = "#c9a227";
+      ctx.fillRect(x, y, w, h);
+      ctx.fillStyle = "#1c1c22";
+      const stripe = Math.max(5, h * 0.85);
+      for (let i = -h; i < w + h; i += stripe * 2) {
+        ctx.beginPath();
+        ctx.moveTo(x + i, y + h);
+        ctx.lineTo(x + i + h, y);
+        ctx.lineTo(x + i + h + stripe, y);
+        ctx.lineTo(x + i + stripe, y + h);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    // Stripes, vents, and a name plate under the shell bay. Nothing here is a control.
+    function drawStorageBase(rect, well) {
+      const x = well.x;
+      const w = well.w;
+      const y = well.y + well.h + 6;
+      const bottom = rect.y + rect.height - 8;
+      const h = bottom - y;
+      if (h < 18 || w < 20) return;
+      const stripeH = Math.min(9, h * 0.22);
+      drawCautionStripes(x, y, w, stripeH);
+      const ventY = y + stripeH + 5;
+      const ventH = 4;
+      const vents = 4;
+      const gap = 6;
+      const ventW = (w - gap * (vents + 1)) / vents;
+      if (ventW > 4 && ventY + ventH < bottom - 16) {
+        ctx.fillStyle = COLOR_JOYSTICK_EDGE_DARK;
+        for (let i = 0; i < vents; i++) {
+          ctx.fillRect(x + gap + i * (ventW + gap), ventY, ventW, ventH);
+        }
+      }
+      const plateH = Math.min(16, Math.max(12, h * 0.32));
+      const plateW = Math.min(w - 28, 132);
+      const plateX = x + (w - plateW) / 2;
+      const plateY = bottom - plateH;
+      ctx.fillStyle = COLOR_JOYSTICK_LABEL;
+      ctx.fillRect(plateX, plateY, plateW, plateH);
+      ctx.strokeStyle = COLOR_JOYSTICK_EDGE_LIGHT;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(plateX + 0.5, plateY + 0.5, plateW - 1, plateH - 1);
+      ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
+      ctx.font = "bold 9px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.font = "bold " + fontPx + "px sans-serif";
-      const maxWidth = Math.max(8, well.w - 16);
-      while (fontPx > 9 && ctx.measureText(label).width > maxWidth) {
-        fontPx -= 1;
-        ctx.font = "bold " + fontPx + "px sans-serif";
-      }
-      ctx.fillText(label, well.x + well.w / 2, well.y + well.h / 2);
+      ctx.fillText("SHELL STORAGE", plateX + plateW / 2, plateY + plateH / 2);
+      drawBolt(plateX - 8, plateY + plateH / 2, 2.2);
+      drawBolt(plateX + plateW + 8, plateY + plateH / 2, 2.2);
     }
 
     function drawShellStorage(room, player) {
@@ -1667,23 +1729,19 @@
       ctx.fillStyle = machineStarted ? "#10140f" : "#000000";
       ctx.fillRect(well.x, well.y, well.w, well.h);
       if (machineStarted && player.shells > 0 && player.hatch < 0.98) {
-        const length = Math.max(28, Math.min(well.w * 0.82, well.h * 0.72 / 0.28));
+        let length = Math.min(well.w * 0.72, well.h / 0.34);
+        length = Math.max(28, length);
         const noseRight = player === player1;
         drawShellGlyph(well.x + well.w / 2, well.y + well.h / 2, length, noseRight ? 0 : Math.PI);
       }
       drawStorageHatches(well, machineStarted ? player.hatch : 0);
-      if (machineStarted && !open && player.hatch > 0.65) drawRenewingLabel(well);
-      ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
-      ctx.font = "bold 11px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("STORAGE", rect.x + rect.width / 2 - 8, rect.y + rect.height - 14);
+      drawStorageBase(rect, well);
       let led = COLOR_JOYSTICK_LED_OFF;
       if (machineStarted && open && player.shells > 0) led = COLOR_JOYSTICK_LED_ON;
       else if (machineStarted && !open) led = COLOR_REFUEL_LED;
       ctx.fillStyle = led;
       ctx.beginPath();
-      ctx.arc(rect.x + rect.width - inset - 6, rect.y + rect.height - 14, 3.5, 0, Math.PI * 2);
+      ctx.arc(rect.x + rect.width - inset - 6, rect.y + 16, 3.5, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
       if (near && usable) drawInteractOutline(rect);
@@ -1746,9 +1804,248 @@
       addStatusMessage(player, "> Storage: Shell dropped. Lost.");
     }
 
-    // The loader will accept a carried shell later. No station takes one yet.
+    function loaderFreeSlot(player) {
+      for (let i = 0; i < player.loaderSlots.length; i++) {
+        if (!player.loaderSlots[i]) return i;
+      }
+      return -1;
+    }
+
+    function loaderReadySlot(player) {
+      for (let i = 0; i < player.loaderSlots.length; i++) {
+        const slot = player.loaderSlots[i];
+        if (slot && slot.ready) return i;
+      }
+      return -1;
+    }
+
+    function loaderCount(player) {
+      let count = 0;
+      for (let i = 0; i < player.loaderSlots.length; i++) {
+        if (player.loaderSlots[i]) count += 1;
+      }
+      return count;
+    }
+
+    function fireBlockReason(player) {
+      if (player.turretBusy) return "Cannot fire: turret turning";
+      if (!player.equationTree) return "Cannot fire: syntax error";
+      if (!player.canFire) return "Cannot fire: no curve";
+      return "";
+    }
+
+    // False means this station does not take a shell, so the hand drops it.
+    // True means the loader handled the press. A full or locked loader keeps the shell.
     function tryDepositShell(player, target) {
-      return false;
+      if (target !== "loader") return false;
+      if (player.loaderLocked) return true;
+      const index = loaderFreeSlot(player);
+      if (index < 0) {
+        player.statusNotice = "Max capacity";
+        addStatusMessage(player, "> Loader: Max capacity.");
+        return true;
+      }
+      player.carryingShell = false;
+      player.loaderSlots[index] = { t: 0, ready: false };
+      if (player.statusNotice === "Max capacity") player.statusNotice = "";
+      addStatusMessage(player, "> Loader: Shell inserted.");
+      return true;
+    }
+
+    function updateLoader(player, dt) {
+      if (!machineStarted) return;
+      for (let i = 0; i < player.loaderSlots.length; i++) {
+        const slot = player.loaderSlots[i];
+        if (!slot || slot.ready) continue;
+        slot.t += dt / LOADER_LOAD_SECONDS;
+        if (slot.t >= 1) {
+          slot.t = 1;
+          slot.ready = true;
+          addStatusMessage(player, "> Loader: Shell ready.");
+        }
+      }
+      if (player.statusNotice === "Max capacity" && loaderFreeSlot(player) >= 0) player.statusNotice = "";
+      if (player.statusNotice.indexOf("Cannot fire:") === 0 && !fireBlockReason(player)) player.statusNotice = "";
+    }
+
+    function toggleLoaderLock(player) {
+      if (player.loaderLocked) {
+        player.loaderLocked = false;
+        addStatusMessage(player, "> Loader: Unlocked.");
+        return;
+      }
+      if (loaderReadySlot(player) < 0) return;
+      player.loaderLocked = true;
+      addStatusMessage(player, "> Loader: Locked.");
+    }
+
+    // The shell leaves the loader here. Flight, hits, and damage come later.
+    function fireShell(player) {
+    }
+
+    function pressLoaderFire(player) {
+      if (!player.loaderLocked) return;
+      if (loaderReadySlot(player) < 0) return;
+      const reason = fireBlockReason(player);
+      if (reason) {
+        player.statusNotice = reason;
+        addStatusMessage(player, "> Loader: " + reason + ".");
+        return;
+      }
+      const index = loaderReadySlot(player);
+      player.loaderSlots[index] = null;
+      player.statusNotice = "";
+      addStatusMessage(player, "> Loader: FIRE! Shell away.");
+      fireShell(player);
+      if (loaderCount(player) === 0) {
+        player.loaderLocked = false;
+        addStatusMessage(player, "> Loader: Unlocked.");
+      }
+    }
+
+    function loaderParts(rect) {
+      const pad = 8;
+      const titleH = 16;
+      const controlH = Math.min(58, Math.max(40, rect.height * 0.26));
+      const slotsTop = rect.y + pad + titleH;
+      const slotsBottom = rect.y + rect.height - controlH - 8;
+      const gap = 5;
+      const slotH = Math.max(8, (slotsBottom - slotsTop - gap * 2) / LOADER_SLOT_COUNT);
+      const slots = [];
+      for (let i = 0; i < LOADER_SLOT_COUNT; i++) {
+        slots.push({
+          x: rect.x + pad,
+          y: slotsTop + i * (slotH + gap),
+          width: rect.width - pad * 2,
+          height: slotH
+        });
+      }
+      const controlY = rect.y + rect.height - controlH - 4;
+      const lockW = Math.min(52, rect.width * 0.28);
+      return {
+        slots: slots,
+        lock: { x: rect.x + pad, y: controlY, width: lockW, height: controlH - 4 },
+        fire: {
+          x: rect.x + pad + lockW + 8,
+          y: controlY,
+          width: Math.max(8, rect.width - pad * 2 - lockW - 8),
+          height: controlH - 4
+        }
+      };
+    }
+
+    function drawLoaderSlot(rect, slot) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(rect.x, rect.y, rect.width, rect.height);
+      ctx.clip();
+      ctx.fillStyle = "#10140f";
+      ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+      ctx.strokeStyle = "rgba(216, 255, 228, 0.28)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.width - 1, rect.height - 1);
+      if (slot) {
+        const barH = Math.max(6, rect.height * 0.2);
+        const innerW = rect.width - 10;
+        const barX = rect.x + 5;
+        const barY = rect.y + rect.height - barH - 4;
+        ctx.fillStyle = "#1c241c";
+        ctx.fillRect(barX, barY, innerW, barH);
+        ctx.fillStyle = slot.ready ? "#39ff6a" : "#ffb020";
+        ctx.fillRect(barX, barY, innerW * Math.min(1, slot.t), barH);
+        if (!slot.ready) {
+          const roomH = Math.max(8, barY - rect.y - 4);
+          const length = Math.min(rect.width * 0.36, roomH / 0.34);
+          drawShellGlyph(rect.x + rect.width / 2, rect.y + roomH / 2, length, 0);
+        } else {
+          ctx.fillStyle = COLOR_MONITOR_TEXT;
+          ctx.font = "bold " + Math.max(10, Math.min(13, Math.floor(rect.height * 0.34))) + "px sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText("READY", rect.x + rect.width / 2, rect.y + rect.height * 0.38);
+        }
+      }
+      ctx.restore();
+    }
+
+    function drawLockLever(rect, locked, armed) {
+      ctx.fillStyle = "#141418";
+      ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+      ctx.strokeStyle = armed || locked ? COLOR_JOYSTICK_EDGE_LIGHT : "#3a3a42";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.width - 1, rect.height - 1);
+      const cx = rect.x + rect.width / 2;
+      const cy = rect.y + rect.height * 0.62;
+      const reach = Math.min(rect.width, rect.height) * 0.34;
+      const angle = locked ? 0.85 : -0.85;
+      ctx.strokeStyle = locked ? COLOR_REFUEL_LED : (armed ? COLOR_JOYSTICK_LABEL_TEXT : "#6a6a74");
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.sin(angle) * reach, cy - Math.cos(angle) * reach);
+      ctx.stroke();
+      ctx.fillStyle = locked ? "#d24545" : "#8a8a96";
+      ctx.beginPath();
+      ctx.arc(cx + Math.sin(angle) * reach, cy - Math.cos(angle) * reach, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
+      ctx.font = "bold 9px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.fillText("LOCK", cx, rect.y + 3);
+    }
+
+    function drawLoaderFireButton(rect, enabled) {
+      ctx.fillStyle = enabled ? "#b42323" : "#4a2426";
+      ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+      ctx.fillStyle = enabled ? "#e24b4b" : "#6a3032";
+      ctx.fillRect(rect.x, rect.y, rect.width, Math.max(3, rect.height * 0.16));
+      ctx.strokeStyle = enabled ? "#ffd0d0" : "#2a1618";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 2);
+      ctx.fillStyle = enabled ? "#fff4f4" : "#a89898";
+      ctx.font = "bold " + Math.max(14, Math.min(22, Math.floor(rect.height * 0.42))) + "px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("FIRE", rect.x + rect.width / 2, rect.y + rect.height / 2 + 1);
+    }
+
+    function drawLoader(room, player) {
+      const rect = getLoaderRect(room);
+      const near = stationNearHand(player, room) === "loader";
+      const parts = loaderParts(rect);
+      ctx.save();
+      drawBeveledRect(rect);
+      const boltR = Math.max(2, Math.min(3, rect.width * 0.03));
+      const inset = boltR + 3;
+      if (rect.width > inset * 2 + 8 && rect.height > inset * 2 + 8) {
+        drawBolt(rect.x + inset, rect.y + inset, boltR);
+        drawBolt(rect.x + rect.width - inset, rect.y + inset, boltR);
+        drawBolt(rect.x + inset, rect.y + rect.height - inset, boltR);
+        drawBolt(rect.x + rect.width - inset, rect.y + rect.height - inset, boltR);
+      }
+      ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
+      ctx.font = "bold 11px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("LOADER", rect.x + rect.width / 2, rect.y + 14);
+      for (let i = 0; i < parts.slots.length; i++) {
+        drawLoaderSlot(parts.slots[i], machineStarted ? player.loaderSlots[i] : null);
+      }
+      const armed = loaderReadySlot(player) >= 0;
+      drawLockLever(parts.lock, player.loaderLocked, machineStarted && armed);
+      if (player.loaderLocked) drawLoaderFireButton(parts.fire, machineStarted && armed);
+      ctx.restore();
+      if (near && machineStarted) drawInteractOutline(rect);
+    }
+
+    function pressLoader(player, room) {
+      const parts = loaderParts(getLoaderRect(room));
+      if (player.loaderLocked && pointInRect(player.x, player.y, parts.fire)) {
+        pressLoaderFire(player);
+        return;
+      }
+      if (pointInRect(player.x, player.y, parts.lock)) toggleLoaderLock(player);
     }
 
     function closeZoom(player) {
@@ -3614,10 +3911,25 @@
       return entry.color;
     }
 
-    // "Status: Intact (100%) | Idle" — condition and health, then what the machine is doing.
-    // Font size is the same 16px the monitor used before the log lines went to capitals.
+    // A storage or loader notice replaces the activity word. Otherwise the line is
+    // "Status: Intact (100%) | Idle".
+    function statusNoticeOf(player) {
+      if (machineStarted && player.storageClosedAt != null) {
+        return { text: "Renewing shells in 1 minute", color: COLOR_REFUEL_LED };
+      }
+      if (player.statusNotice === "Max capacity") {
+        return { text: "Max capacity", color: COLOR_REFUEL_LED };
+      }
+      if (player.statusNotice) return { text: player.statusNotice, color: COLOR_MONITOR_WARNING };
+      return null;
+    }
+
     function drawStatusLine(player, x, y, fontSize) {
-      const parts = [
+      const notice = statusNoticeOf(player);
+      const parts = notice ? [
+        { text: "Status: ", color: COLOR_MONITOR_TEXT },
+        { text: notice.text, color: notice.color }
+      ] : [
         { text: "Status: ", color: COLOR_MONITOR_TEXT },
         { text: player.condition + " (" + healthPercent(player) + "%)", color: conditionColor(player.condition) },
         { text: " | ", color: COLOR_MONITOR_TEXT },
@@ -3732,17 +4044,22 @@
         { kind: "fire", rect: plate.fire },
         { kind: "turret", rect: plate.dial },
         { kind: "map", rect: plate.map },
-        { kind: "storage", rect: getStorageRect(room) }
+        { kind: "storage", rect: getStorageRect(room) },
+        { kind: "loader", rect: getLoaderRect(room) }
       ];
       let bestKind = "";
       let bestDist = 0;
+      let bestInside = false;
       for (let i = 0; i < stations.length; i++) {
         const station = stations[i];
-        if (!handIsNearMonitor(player, station.rect)) continue;
+        const inside = pointInRect(player.x, player.y, station.rect);
+        if (!inside && !handIsNearMonitor(player, station.rect)) continue;
         const dist = distanceFromHandCenter(player, station.rect);
-        if (bestKind === "" || dist < bestDist) {
+        // A hand sitting on a plate belongs to that plate, even when a neighbor's center is closer.
+        if (bestKind === "" || (inside && !bestInside) || (inside === bestInside && dist < bestDist)) {
           bestKind = station.kind;
           bestDist = dist;
+          bestInside = inside;
         }
       }
       // A full tank keeps the button in the way, but the press does nothing.
@@ -3797,6 +4114,10 @@
       }
       if (kind === "storage") {
         takeShell(player);
+        return;
+      }
+      if (kind === "loader") {
+        pressLoader(player, room);
         return;
       }
       if (kind === "fire" || kind === "turret" || kind === "map") {
