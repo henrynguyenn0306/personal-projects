@@ -8,6 +8,13 @@
     body { margin: 0; overflow: hidden; background: #14141e; }
     canvas { display: block; width: 100vw; height: 100vh; }
   </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js"
+      }
+    }
+  </script>
 </head>
 <body>
   <canvas id="room"></canvas>
@@ -120,16 +127,11 @@
     const COLOR_RADAR_SWEEP = "#d8ffe4";
     const COLOR_RADAR_ENEMY = "255, 64, 64";
     const COLOR_RADAR_OBSTACLE = "150, 186, 160";
-    const OBSTACLE_COUNT = 12;
-    const BUILDING_MIN_SIZE = 4;
-    const BUILDING_MAX_SIZE = 14;
-    const TOWER_MIN_RADIUS = 2;
-    const TOWER_MAX_RADIUS = 5;
-    const BIG_OBSTACLE_SIZE = PLAYER_SIZE * 3; // building side, or tower diameter
-    const BIG_OBSTACLE_MIN = 1;
-    const BIG_OBSTACLE_MAX = 3;
-    const OBSTACLE_CLEARANCE = 8; // empty units around each player's center
-    const OBSTACLE_PLACE_TRIES = 8;
+    const OBSTACLE_COUNT_MIN = 26;
+    const OBSTACLE_COUNT_MAX = 34;
+    // Open ground around each spawn, measured from the machine center to the obstacle's reach.
+    const OBSTACLE_CLEARANCE = 14;
+    const OBSTACLE_PLACE_TRIES = 48;
     // How close an opponent must be to an obstacle edge to light the red ping.
     const OBSTACLE_NEAR_DISTANCE = 3;
     // Meters from your own machine's edge to an obstacle's edge.
@@ -1835,18 +1837,15 @@
         }
         ctx.stroke();
       }
-      if (flight && isFinite(flight.peak)) {
-        ctx.fillStyle = COLOR_RADAR_YOU;
-        ctx.beginPath();
-        ctx.arc(px(flight.peakX), py(flight.peak), 3.5, 0, Math.PI * 2);
-        ctx.fill();
-      }
       if (flight && flight.impact) {
         const markX = px(flight.distance);
         const markY = py(0);
         const arm = 5;
         ctx.strokeStyle = "#ffb020";
         ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(markX, markY, arm + 3, 0, Math.PI * 2);
+        ctx.stroke();
         ctx.beginPath();
         ctx.moveTo(markX - arm, markY - arm);
         ctx.lineTo(markX + arm, markY + arm);
@@ -1996,7 +1995,245 @@
       ctx.restore();
     }
 
-    // Left side is the shell graph. Right side is the keypad. Same frame as the monitor zoom.
+    // Fixed 3D look at this player's arc. Loaded once, drawn only while the zoom is open.
+    let fireThree = null;
+    let fireRenderer = null;
+    const fireScenes = [null, null];
+
+    import("three").then(function (THREE) {
+      fireThree = THREE;
+    }).catch(function () {
+      fireThree = null;
+    });
+
+    function firePlayerIndex(player) {
+      return player === player1 ? 0 : 1;
+    }
+
+    function fireViewSpan(flight) {
+      let reach = 0;
+      let height = 0;
+      if (flight && flight.points) {
+        for (let i = 0; i < flight.points.length; i++) {
+          if (flight.points[i].x > reach) reach = flight.points[i].x;
+          if (flight.points[i].y > height) height = flight.points[i].y;
+        }
+      }
+      if (flight && flight.impact && flight.distance > reach) reach = flight.distance;
+      if (flight && flight.peak > height) height = flight.peak;
+      return {
+        reach: Math.max(20, reach * 1.18),
+        height: Math.max(8, height * 1.22)
+      };
+    }
+
+    function fireGridStep(span) {
+      const raw = span / 5;
+      if (!(raw > 0)) return 5;
+      const pow = Math.pow(10, Math.floor(Math.log10(raw)));
+      const n = raw / pow;
+      let step = 10;
+      if (n < 1.5) step = 1;
+      else if (n < 3.5) step = 2;
+      else if (n < 7.5) step = 5;
+      return step * pow;
+    }
+
+    function disposeFireObject(object) {
+      object.traverse(function (child) {
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) {
+          if (child.material.map) child.material.map.dispose();
+          child.material.dispose();
+        }
+      });
+    }
+
+    function clearFireScene(scene) {
+      while (scene.children.length > 0) {
+        const child = scene.children[scene.children.length - 1];
+        scene.remove(child);
+        disposeFireObject(child);
+      }
+    }
+
+    function ensureFireScene(index) {
+      if (fireScenes[index]) return fireScenes[index];
+      const THREE = fireThree;
+      if (!fireRenderer) {
+        const canvas = document.createElement("canvas");
+        fireRenderer = new THREE.WebGLRenderer({
+          canvas: canvas,
+          antialias: true,
+          alpha: false,
+          preserveDrawingBuffer: true
+        });
+        fireRenderer.setClearColor(0x04140a, 1);
+      }
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 2000);
+      fireScenes[index] = { scene: scene, camera: camera, sig: "", reach: 20, height: 8 };
+      return fireScenes[index];
+    }
+
+    function fireSignature(player) {
+      const flight = player.flight;
+      if (!player.equationTree || !flight) return "bad|" + (player.equation || "");
+      const end = flight.impact ? flight.distance : (flight.points.length ? flight.points[flight.points.length - 1].x : 0);
+      return player.equation + "|" + end + "|" + flight.peak + "|" + flight.points.length;
+    }
+
+    // Ground distance runs past the landing. Height fits the peak. The angle stays put.
+    function fitFireCamera(view) {
+      const THREE = fireThree;
+      const reach = view.reach;
+      const height = view.height;
+      const depth = Math.max(6, reach * 0.22);
+      const target = new THREE.Vector3(reach * 0.42, height * 0.3, 0);
+      const dir = new THREE.Vector3(0.42, 0.78, 1).normalize();
+      const camera = view.camera;
+      const corners = [
+        new THREE.Vector3(0, 0, -depth),
+        new THREE.Vector3(reach, 0, -depth),
+        new THREE.Vector3(reach, 0, depth),
+        new THREE.Vector3(0, 0, depth),
+        new THREE.Vector3(0, height, 0),
+        new THREE.Vector3(reach, height, 0)
+      ];
+      let dist = Math.max(reach, height) * 1.2;
+      for (let attempt = 0; attempt < 8; attempt++) {
+        camera.far = Math.max(4000, dist * 6);
+        camera.position.copy(target).addScaledVector(dir, dist);
+        camera.lookAt(target);
+        camera.updateProjectionMatrix();
+        camera.updateMatrixWorld(true);
+        let maxNdc = 0;
+        for (let i = 0; i < corners.length; i++) {
+          const ndc = corners[i].clone().project(camera);
+          maxNdc = Math.max(maxNdc, Math.abs(ndc.x), Math.abs(ndc.y));
+        }
+        if (maxNdc < 0.88) return;
+        dist *= Math.max(1.08, maxNdc / 0.8);
+      }
+    }
+
+    function rebuildFireScene(view, player) {
+      const THREE = fireThree;
+      const scene = view.scene;
+      clearFireScene(scene);
+      const span = fireViewSpan(player.flight);
+      view.reach = span.reach;
+      view.height = span.height;
+      const reach = span.reach;
+      const height = span.height;
+      const depth = Math.max(6, reach * 0.22);
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(reach, depth * 2),
+        new THREE.MeshBasicMaterial({ color: 0x102818 })
+      );
+      ground.rotation.x = -Math.PI / 2;
+      ground.position.set(reach / 2, 0, 0);
+      scene.add(ground);
+
+      const step = fireGridStep(reach);
+      const grid = [];
+      for (let x = 0; x <= reach + 0.01; x += step) {
+        grid.push(x, 0.03, -depth, x, 0.03, depth);
+      }
+      for (let z = -depth; z <= depth + 0.01; z += step) {
+        grid.push(0, 0.03, z, reach, 0.03, z);
+      }
+      const gridGeom = new THREE.BufferGeometry();
+      gridGeom.setAttribute("position", new THREE.Float32BufferAttribute(grid, 3));
+      scene.add(new THREE.LineSegments(gridGeom, new THREE.LineBasicMaterial({ color: 0x2f6a45 })));
+
+      const axis = new THREE.LineBasicMaterial({ color: 0xff5555 });
+      const xAxis = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0.06, 0),
+        new THREE.Vector3(reach, 0.06, 0)
+      ]);
+      const yAxis = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(0, height, 0)
+      ]);
+      scene.add(new THREE.Line(xAxis, axis));
+      scene.add(new THREE.Line(yAxis, axis));
+      const arrow = new THREE.Mesh(
+        new THREE.ConeGeometry(Math.max(0.25, height * 0.035), Math.max(0.8, height * 0.09), 12),
+        new THREE.MeshBasicMaterial({ color: 0xff5555 })
+      );
+      arrow.position.set(0, height + Math.max(0.4, height * 0.045), 0);
+      scene.add(arrow);
+
+      const flight = player.flight;
+      const color = firePlayerIndex(player) === 0 ? COLOR_P1 : COLOR_P2;
+      if (flight && flight.points && flight.points.length > 1) {
+        const vectors = [];
+        for (let i = 0; i < flight.points.length; i++) {
+          const point = flight.points[i];
+          vectors.push(new THREE.Vector3(point.x, point.y + 0.04, 0));
+        }
+        scene.add(new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints(vectors),
+          new THREE.LineBasicMaterial({ color: color })
+        ));
+      }
+      if (flight && flight.impact && flight.distance !== null) {
+        const size = Math.max(0.35, reach * 0.02);
+        const lift = 0.08;
+        const x = flight.distance;
+        const mark = new THREE.LineBasicMaterial({ color: color });
+        const a = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(x - size, lift, -size),
+          new THREE.Vector3(x + size, lift, size)
+        ]);
+        const b = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(x - size, lift, size),
+          new THREE.Vector3(x + size, lift, -size)
+        ]);
+        scene.add(new THREE.Line(a, mark));
+        scene.add(new THREE.Line(b, mark));
+        const ring = new THREE.Mesh(
+          new THREE.RingGeometry(size * 1.15, size * 1.55, 28),
+          new THREE.MeshBasicMaterial({ color: color, side: THREE.DoubleSide })
+        );
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.set(x, 0.05, 0);
+        scene.add(ring);
+      }
+    }
+
+    function drawFireArcView(screen, player) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(screen.x, screen.y, screen.w, screen.h);
+      ctx.clip();
+      ctx.fillStyle = COLOR_RADAR_SCREEN;
+      ctx.fillRect(screen.x, screen.y, screen.w, screen.h);
+      if (!fireThree || screen.w < 16 || screen.h < 16) {
+        ctx.restore();
+        return;
+      }
+      const view = ensureFireScene(firePlayerIndex(player));
+      const sig = fireSignature(player);
+      if (view.sig !== sig) {
+        rebuildFireScene(view, player);
+        view.sig = sig;
+      }
+      const width = Math.max(2, Math.floor(screen.w));
+      const height = Math.max(2, Math.floor(screen.h));
+      if (fireRenderer.domElement.width !== width || fireRenderer.domElement.height !== height) {
+        fireRenderer.setSize(width, height, false);
+      }
+      view.camera.aspect = width / height;
+      view.camera.updateProjectionMatrix();
+      fitFireCamera(view);
+      fireRenderer.render(view.scene, view.camera);
+      ctx.drawImage(fireRenderer.domElement, screen.x, screen.y, screen.w, screen.h);
+      ctx.restore();
+    }
+
+    // Left side is the shell arc. Right side is the keypad. Same frame as the monitor zoom.
     function drawFireZoom(player, view) {
       syncEquation(player);
       const screenX = view.screenX;
@@ -2030,11 +2267,7 @@
       const graphY = screenY + eqH + 8;
       const graphH = screenH - eqH - infoH - 16;
       if (graphH > 24) {
-        drawShellGraph(
-          { x: screenX, y: graphY, w: leftW, h: graphH },
-          player.equationTree,
-          player.flight
-        );
+        drawFireArcView({ x: screenX, y: graphY, w: leftW, h: graphH }, player);
       }
 
       const lines = impactLines(player);
@@ -2989,38 +3222,32 @@
       return Math.hypot(obstacle.w / 2, obstacle.h / 2);
     }
 
-    function randomObstacle(index, big) {
-      // Even numbers are buildings and odd numbers are towers, so the map has both.
-      // A big shape is about three player-diameters across.
-      if (index % 2 === 0) {
-        return {
-          type: "building",
-          x: 0,
-          y: 0,
-          w: big ? BIG_OBSTACLE_SIZE : randomRange(BUILDING_MIN_SIZE, BUILDING_MAX_SIZE),
-          h: big ? BIG_OBSTACLE_SIZE : randomRange(BUILDING_MIN_SIZE, BUILDING_MAX_SIZE)
-        };
+    // Huts, blocks, halls, low walls, and towers. Radar and collision only need these two types.
+    function randomObstacle() {
+      const roll = Math.random();
+      if (roll < 0.16) {
+        const long = randomRange(18, 34);
+        const thick = randomRange(3, 6);
+        if (Math.random() < 0.5) return { type: "building", x: 0, y: 0, w: long, h: thick };
+        return { type: "building", x: 0, y: 0, w: thick, h: long };
       }
-      return {
-        type: "tower",
-        x: 0,
-        y: 0,
-        r: big ? BIG_OBSTACLE_SIZE / 2 : randomRange(TOWER_MIN_RADIUS, TOWER_MAX_RADIUS)
-      };
-    }
-
-    function pickBigIndexes() {
-      const count = BIG_OBSTACLE_MIN + Math.floor(Math.random() * (BIG_OBSTACLE_MAX - BIG_OBSTACLE_MIN + 1));
-      const picked = [];
-      while (picked.length < count) {
-        const index = Math.floor(Math.random() * OBSTACLE_COUNT);
-        let already = false;
-        for (let i = 0; i < picked.length; i++) {
-          if (picked[i] === index) already = true;
-        }
-        if (!already) picked.push(index);
+      if (roll < 0.34) {
+        const long = randomRange(14, 26);
+        const short = randomRange(6, 12);
+        if (Math.random() < 0.5) return { type: "building", x: 0, y: 0, w: long, h: short };
+        return { type: "building", x: 0, y: 0, w: short, h: long };
       }
-      return picked;
+      if (roll < 0.56) {
+        const side = randomRange(8, 16);
+        return { type: "building", x: 0, y: 0, w: side, h: randomRange(side * 0.65, side * 1.15) };
+      }
+      if (roll < 0.72) {
+        const side = randomRange(4, 8);
+        return { type: "building", x: 0, y: 0, w: side, h: side };
+      }
+      if (roll < 0.84) return { type: "tower", x: 0, y: 0, r: randomRange(2, 3.5) };
+      if (roll < 0.94) return { type: "tower", x: 0, y: 0, r: randomRange(3.5, 6.5) };
+      return { type: "tower", x: 0, y: 0, r: randomRange(6.5, 10) };
     }
 
     function obstacleHitsPlayers(obstacle, players) {
@@ -3042,24 +3269,27 @@
     }
 
     function makeObstacles(players) {
-      const bigIndexes = pickBigIndexes();
+      const span = OBSTACLE_COUNT_MAX - OBSTACLE_COUNT_MIN + 1;
+      const count = OBSTACLE_COUNT_MIN + Math.floor(Math.random() * span);
       const obstacles = [];
-      for (let n = 0; n < OBSTACLE_COUNT; n++) {
-        let isBig = false;
-        for (let i = 0; i < bigIndexes.length; i++) {
-          if (bigIndexes[i] === n) isBig = true;
-        }
-        let fallback = null;
+      for (let n = 0; n < count; n++) {
+        let placed = null;
         for (let attempt = 0; attempt < OBSTACLE_PLACE_TRIES; attempt++) {
-          const obstacle = randomObstacle(n, isBig);
+          const obstacle = randomObstacle();
           const reach = obstacleReach(obstacle);
-          obstacle.x = randomRange(-FIELD_X_MAX + reach, FIELD_X_MAX - reach);
-          obstacle.y = randomRange(-FIELD_Y_MAX + reach, FIELD_Y_MAX - reach);
+          const xMin = -FIELD_X_MAX + reach;
+          const xMax = FIELD_X_MAX - reach;
+          const yMin = -FIELD_Y_MAX + reach;
+          const yMax = FIELD_Y_MAX - reach;
+          if (xMax <= xMin || yMax <= yMin) continue;
+          obstacle.x = randomRange(xMin, xMax);
+          obstacle.y = randomRange(yMin, yMax);
           if (obstacleHitsPlayers(obstacle, players)) continue;
-          fallback = obstacle;
-          if (!obstacleHitsAnother(obstacle, obstacles)) break;
+          if (obstacleHitsAnother(obstacle, obstacles)) continue;
+          placed = obstacle;
+          break;
         }
-        if (fallback) obstacles.push(fallback);
+        if (placed) obstacles.push(placed);
       }
       return obstacles;
     }

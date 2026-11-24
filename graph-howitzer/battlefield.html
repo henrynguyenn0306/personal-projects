@@ -79,7 +79,6 @@
     const COLOR_P2 = 0xff8a3d;
     const COLOR_BUILDING = 0x8a8a96;
     const COLOR_TOWER = 0xc8c8d2;
-    const Z_AXIS_HEIGHT = 46;
     const GRID_METERS = 20;
     const OUTLINE_Y = 0.08;
     const SHAPE_Y = 0.14;
@@ -240,11 +239,6 @@
 
       addSolid(new THREE.BoxGeometry(width, 0.45, 0.45), axis, originX + width / 2, lift, originZ, scene);
       addSolid(new THREE.BoxGeometry(0.45, 0.45, depth), axis, originX, lift, originZ + depth / 2, scene);
-      addSolid(new THREE.BoxGeometry(0.45, Z_AXIS_HEIGHT, 0.45), axis, originX, Z_AXIS_HEIGHT / 2, originZ, scene);
-
-      const arrow = new THREE.Mesh(new THREE.ConeGeometry(2.2, 7, 16), axis);
-      arrow.position.set(originX, Z_AXIS_HEIGHT + 3.2, originZ);
-      scene.add(arrow);
 
       for (let meters = GRID_METERS; meters <= width + 0.01; meters += GRID_METERS) {
         addSolid(new THREE.BoxGeometry(0.35, 0.35, 2.4), axis, originX + meters, lift, originZ - 1.4, scene);
@@ -266,19 +260,77 @@
       yName.position.set(originX - 3, 3, originZ + depth + 6);
       scene.add(yName);
 
-      for (let meters = GRID_METERS; meters <= Z_AXIS_HEIGHT - 4; meters += GRID_METERS) {
-        addSolid(new THREE.BoxGeometry(2.6, 0.35, 0.35), axis, originX - 1.6, meters, originZ, scene);
-        const label = makeTextSprite(String(meters));
-        label.position.set(originX - 8, meters, originZ);
-        scene.add(label);
-      }
-      const zName = makeTextSprite("z (height)");
-      zName.position.set(originX - 20, Z_AXIS_HEIGHT + 8, originZ);
-      scene.add(zName);
-
       const zero = makeTextSprite("0");
       zero.position.set(originX - 6, 2.2, originZ - 5);
       scene.add(zero);
+    }
+
+    let zAxisGroup = null;
+    let zAxisHeight = 0;
+
+    // Pole reaches the next 20 m tick above the tallest arc, with a little headroom.
+    function snappedAxisHeight(peak) {
+      const top = Math.max(0, peak) + Math.max(4, peak * 0.15);
+      const snapped = Math.ceil(top / GRID_METERS) * GRID_METERS;
+      return Math.max(GRID_METERS, snapped);
+    }
+
+    function forgetLabels(group) {
+      const keep = [];
+      for (let i = 0; i < labels.length; i++) {
+        let node = labels[i];
+        let inside = false;
+        while (node) {
+          if (node === group) inside = true;
+          node = node.parent;
+        }
+        if (!inside) keep.push(labels[i]);
+      }
+      labels.length = 0;
+      for (let i = 0; i < keep.length; i++) labels.push(keep[i]);
+    }
+
+    function disposeShared(object) {
+      const materials = [];
+      object.traverse(function (child) {
+        if (child.geometry) child.geometry.dispose();
+        if (child.material && materials.indexOf(child.material) < 0) {
+          if (child.material.map) child.material.map.dispose();
+          materials.push(child.material);
+        }
+      });
+      for (let i = 0; i < materials.length; i++) materials[i].dispose();
+    }
+
+    function buildZAxis(height) {
+      const originX = -battlefield.width / 2;
+      const originZ = -battlefield.height / 2;
+      const group = new THREE.Group();
+      const material = new THREE.MeshBasicMaterial({ color: COLOR_AXIS });
+      addSolid(new THREE.BoxGeometry(0.45, height, 0.45), material, originX, height / 2, originZ, group);
+      const arrow = new THREE.Mesh(new THREE.ConeGeometry(2.2, 7, 16), material);
+      arrow.position.set(originX, height + 5.5, originZ);
+      group.add(arrow);
+      for (let meters = GRID_METERS; meters <= height + 0.01; meters += GRID_METERS) {
+        addSolid(new THREE.BoxGeometry(2.6, 0.35, 0.35), material, originX - 1.6, meters, originZ, group);
+        const label = makeTextSprite(String(meters));
+        label.position.set(originX - 8, meters, originZ);
+        group.add(label);
+      }
+      return group;
+    }
+
+    function syncZAxis(peak) {
+      const next = snappedAxisHeight(peak);
+      if (zAxisGroup && next === zAxisHeight) return;
+      if (zAxisGroup) {
+        forgetLabels(zAxisGroup);
+        scene.remove(zAxisGroup);
+        disposeShared(zAxisGroup);
+      }
+      zAxisHeight = next;
+      zAxisGroup = buildZAxis(next);
+      scene.add(zAxisGroup);
     }
 
     function disposeObject(object) {
@@ -629,6 +681,13 @@
       const group = new THREE.Group();
       group.add(new THREE.Line(first, material));
       group.add(new THREE.Line(second, material.clone()));
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(size * 1.25, size * 1.75, 28),
+        new THREE.MeshBasicMaterial({ color: color, side: THREE.DoubleSide })
+      );
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.set(at.x, lift - 0.06, at.z);
+      group.add(ring);
       return group;
     }
 
@@ -652,12 +711,7 @@
         polygonOffsetFactor: -4,
         polygonOffsetUnits: -4
       })));
-      const peak = new THREE.Mesh(
-        new THREE.SphereGeometry(0.7, 12, 8),
-        new THREE.MeshBasicMaterial({ color: color })
-      );
-      peak.position.copy(arcWorld(player, aim, curve.peakX, curve.peak));
-      group.add(peak);
+      group.userData.peak = curve.peak || 0;
       if (curve.impact && curve.distance !== null) {
         const impactAt = arcWorld(player, aim, curve.distance, 0);
         group.add(makeGroundX(color, impactAt));
@@ -694,6 +748,12 @@
         arcObjects[i] = group;
         arcsGroup.add(group);
       }
+      let maxPeak = 0;
+      for (let i = 0; i < arcObjects.length; i++) {
+        const arc = arcObjects[i];
+        if (arc && arc.userData.peak > maxPeak) maxPeak = arc.userData.peak;
+      }
+      syncZAxis(maxPeak);
     }
 
     function playerIndexOf(object) {
