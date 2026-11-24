@@ -1834,10 +1834,10 @@
       return "";
     }
 
-    // False means this station does not take a shell, so the hand drops it.
-    // True means the loader handled the press. A full or locked loader keeps the shell.
+    // False means this was not the insert port, so the hand drops the shell.
+    // True means the port handled the press. A full or locked loader keeps the shell.
     function tryDepositShell(player, target) {
-      if (target !== "loader") return false;
+      if (target !== "loader-port") return false;
       if (player.loaderLocked) return true;
       const index = loaderFreeSlot(player);
       if (index < 0) {
@@ -1846,7 +1846,7 @@
         return true;
       }
       player.carryingShell = false;
-      player.loaderSlots[index] = { t: 0, ready: false };
+      player.loaderSlots[index] = { t: 0, ready: false, slide: 1 };
       if (player.statusNotice === "Max capacity") player.statusNotice = "";
       addStatusMessage(player, "> Loader: Shell inserted.");
       return true;
@@ -1856,7 +1856,9 @@
       if (!machineStarted) return;
       for (let i = 0; i < player.loaderSlots.length; i++) {
         const slot = player.loaderSlots[i];
-        if (!slot || slot.ready) continue;
+        if (!slot) continue;
+        if (slot.slide > 0) slot.slide = Math.max(0, slot.slide - dt / 0.45);
+        if (slot.ready) continue;
         slot.t += dt / LOADER_LOAD_SECONDS;
         if (slot.t >= 1) {
           slot.t = 1;
@@ -1883,17 +1885,32 @@
     function fireShell(player) {
     }
 
+    // Lit only while the breech is locked and the fire-control equation can fire.
+    function loaderFireLit(player) {
+      return machineStarted && player.loaderLocked && !!player.canFire;
+    }
+
+    function compactLoaderSlots(player) {
+      const packed = [];
+      for (let i = 0; i < player.loaderSlots.length; i++) {
+        if (player.loaderSlots[i]) packed.push(player.loaderSlots[i]);
+      }
+      for (let i = 0; i < LOADER_SLOT_COUNT; i++) {
+        player.loaderSlots[i] = i < packed.length ? packed[i] : null;
+      }
+    }
+
     function pressLoaderFire(player) {
-      if (!player.loaderLocked) return;
+      if (!loaderFireLit(player)) return;
       if (loaderReadySlot(player) < 0) return;
-      const reason = fireBlockReason(player);
-      if (reason) {
-        player.statusNotice = reason;
-        addStatusMessage(player, "> Loader: " + reason + ".");
+      if (player.turretBusy) {
+        player.statusNotice = "Cannot fire: turret turning";
+        addStatusMessage(player, "> Loader: Cannot fire: turret turning.");
         return;
       }
       const index = loaderReadySlot(player);
       player.loaderSlots[index] = null;
+      compactLoaderSlots(player);
       player.statusNotice = "";
       addStatusMessage(player, "> Loader: FIRE! Shell away.");
       fireShell(player);
@@ -1903,66 +1920,123 @@
       }
     }
 
+    // A sideways chamber across the plate. The only insert port is its right end.
+    // FIRE sits directly above the lock, under the left side of the chamber.
     function loaderParts(rect) {
       const pad = 8;
       const titleH = 16;
-      const controlH = Math.min(58, Math.max(40, rect.height * 0.26));
-      const slotsTop = rect.y + pad + titleH;
-      const slotsBottom = rect.y + rect.height - controlH - 8;
-      const gap = 5;
-      const slotH = Math.max(8, (slotsBottom - slotsTop - gap * 2) / LOADER_SLOT_COUNT);
+      const gap = 6;
+      const controlH = Math.max(40, Math.min(50, rect.height * 0.2));
+      const controlW = Math.min(108, rect.width * 0.4);
+      const controlsH = controlH * 2 + gap;
+      let chamberH = rect.height - pad * 2 - titleH - gap - controlsH;
+      if (chamberH < 64) chamberH = 64;
+      const chamber = {
+        x: rect.x + pad,
+        y: rect.y + pad + titleH,
+        width: Math.max(24, rect.width - pad * 2),
+        height: chamberH
+      };
+      const portW = Math.min(46, Math.max(32, chamber.width * 0.16));
+      const rowW = Math.max(12, chamber.width - portW);
+      const slotW = rowW / LOADER_SLOT_COUNT;
       const slots = [];
       for (let i = 0; i < LOADER_SLOT_COUNT; i++) {
         slots.push({
-          x: rect.x + pad,
-          y: slotsTop + i * (slotH + gap),
-          width: rect.width - pad * 2,
-          height: slotH
+          x: chamber.x + i * slotW,
+          y: chamber.y,
+          width: slotW,
+          height: chamber.height
         });
       }
-      const controlY = rect.y + rect.height - controlH - 4;
-      const lockW = Math.min(52, rect.width * 0.28);
+      const controlsY = chamber.y + chamber.height + gap;
       return {
+        chamber: chamber,
         slots: slots,
-        lock: { x: rect.x + pad, y: controlY, width: lockW, height: controlH - 4 },
-        fire: {
-          x: rect.x + pad + lockW + 8,
-          y: controlY,
-          width: Math.max(8, rect.width - pad * 2 - lockW - 8),
-          height: controlH - 4
-        }
+        port: { x: chamber.x + rowW, y: chamber.y, width: portW, height: chamber.height },
+        fire: { x: rect.x + pad, y: controlsY, width: controlW, height: controlH },
+        lock: { x: rect.x + pad, y: controlsY + controlH + gap, width: controlW, height: controlH }
       };
     }
 
-    function drawLoaderSlot(rect, slot) {
-      ctx.save();
+    function drawLoaderPort(port) {
+      ctx.fillStyle = "#070908";
+      ctx.fillRect(port.x, port.y, port.width, port.height);
+      ctx.strokeStyle = "#8d8d98";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(port.x + 3.5, port.y + 5, port.width - 7, port.height - 10);
+      const cx = port.x + port.width / 2;
+      const cy = port.y + port.height / 2;
+      const radius = Math.min(port.width * 0.28, port.height * 0.18);
+      ctx.fillStyle = "#000000";
       ctx.beginPath();
-      ctx.rect(rect.x, rect.y, rect.width, rect.height);
-      ctx.clip();
-      ctx.fillStyle = "#10140f";
-      ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#c8c8d2";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.strokeStyle = "#5c5c66";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(port.x + 6, cy - radius - 6);
+      ctx.lineTo(cx - radius - 2, cy);
+      ctx.lineTo(port.x + 6, cy + radius + 6);
+      ctx.stroke();
+    }
+
+    function drawLoaderChamber(parts, player) {
+      const chamber = parts.chamber;
+      ctx.fillStyle = machineStarted ? "#10140f" : "#000000";
+      ctx.fillRect(chamber.x, chamber.y, chamber.width, chamber.height);
       ctx.strokeStyle = "rgba(216, 255, 228, 0.28)";
       ctx.lineWidth = 1;
-      ctx.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.width - 1, rect.height - 1);
-      if (slot) {
-        const barH = Math.max(6, rect.height * 0.2);
-        const innerW = rect.width - 10;
-        const barX = rect.x + 5;
-        const barY = rect.y + rect.height - barH - 4;
-        ctx.fillStyle = "#1c241c";
-        ctx.fillRect(barX, barY, innerW, barH);
-        ctx.fillStyle = slot.ready ? "#39ff6a" : "#ffb020";
-        ctx.fillRect(barX, barY, innerW * Math.min(1, slot.t), barH);
-        if (!slot.ready) {
-          const roomH = Math.max(8, barY - rect.y - 4);
-          const length = Math.min(rect.width * 0.36, roomH / 0.34);
-          drawShellGlyph(rect.x + rect.width / 2, rect.y + roomH / 2, length, 0);
-        } else {
+      ctx.strokeRect(chamber.x + 0.5, chamber.y + 0.5, chamber.width - 1, chamber.height - 1);
+      ctx.strokeStyle = "rgba(216, 255, 228, 0.14)";
+      for (let i = 1; i < parts.slots.length; i++) {
+        const x = parts.slots[i].x;
+        ctx.beginPath();
+        ctx.moveTo(x, chamber.y + 5);
+        ctx.lineTo(x, chamber.y + chamber.height - 5);
+        ctx.stroke();
+      }
+      const rail = 3;
+      ctx.fillStyle = "#2a2e32";
+      ctx.fillRect(chamber.x + 3, chamber.y + 4, chamber.width - parts.port.width - 6, rail);
+      ctx.fillRect(chamber.x + 3, chamber.y + chamber.height - 7, chamber.width - parts.port.width - 6, rail);
+      drawLoaderPort(parts.port);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(chamber.x, chamber.y, chamber.width, chamber.height);
+      ctx.clip();
+      for (let i = 0; i < parts.slots.length; i++) {
+        const slotRect = parts.slots[i];
+        const slot = machineStarted ? player.loaderSlots[i] : null;
+        const barH = 7;
+        const barX = slotRect.x + 5;
+        const barY = slotRect.y + slotRect.height - barH - 12;
+        const barW = Math.max(4, slotRect.width - 10);
+        if (slot) {
+          ctx.fillStyle = "#1c241c";
+          ctx.fillRect(barX, barY, barW, barH);
+          ctx.fillStyle = slot.ready ? "#39ff6a" : "#ffb020";
+          ctx.fillRect(barX, barY, barW * Math.min(1, slot.t), barH);
+        }
+        if (!slot) continue;
+        const slide = slot.slide > 0 ? slot.slide : 0;
+        const homeX = slotRect.x + slotRect.width / 2;
+        const portX = parts.port.x + parts.port.width / 2;
+        const x = homeX + (portX - homeX) * slide;
+        const shellTop = slotRect.y + (slot.ready ? 18 : 10);
+        const shellRoom = Math.max(10, barY - shellTop);
+        const length = Math.min(slotRect.width * 0.86, shellRoom / 0.34);
+        const y = shellTop + shellRoom / 2;
+        drawShellGlyph(x, y, Math.max(16, length), 0);
+        if (slot.ready && slide === 0) {
           ctx.fillStyle = COLOR_MONITOR_TEXT;
-          ctx.font = "bold " + Math.max(10, Math.min(13, Math.floor(rect.height * 0.34))) + "px sans-serif";
+          ctx.font = "bold 10px sans-serif";
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
-          ctx.fillText("READY", rect.x + rect.width / 2, rect.y + rect.height * 0.38);
+          ctx.fillText("READY", homeX, slotRect.y + 12);
         }
       }
       ctx.restore();
@@ -1996,14 +2070,14 @@
     }
 
     function drawLoaderFireButton(rect, enabled) {
-      ctx.fillStyle = enabled ? "#b42323" : "#4a2426";
+      ctx.fillStyle = enabled ? "#c62828" : "#1a1214";
       ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
-      ctx.fillStyle = enabled ? "#e24b4b" : "#6a3032";
+      ctx.fillStyle = enabled ? "#ff5a4a" : "#2a1c1e";
       ctx.fillRect(rect.x, rect.y, rect.width, Math.max(3, rect.height * 0.16));
-      ctx.strokeStyle = enabled ? "#ffd0d0" : "#2a1618";
+      ctx.strokeStyle = enabled ? "#ffd0d0" : "#3a2a2c";
       ctx.lineWidth = 2;
       ctx.strokeRect(rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 2);
-      ctx.fillStyle = enabled ? "#fff4f4" : "#a89898";
+      ctx.fillStyle = enabled ? "#fff4f4" : "#6e6062";
       ctx.font = "bold " + Math.max(14, Math.min(22, Math.floor(rect.height * 0.42))) + "px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
@@ -2029,19 +2103,17 @@
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText("LOADER", rect.x + rect.width / 2, rect.y + 14);
-      for (let i = 0; i < parts.slots.length; i++) {
-        drawLoaderSlot(parts.slots[i], machineStarted ? player.loaderSlots[i] : null);
-      }
+      drawLoaderChamber(parts, player);
       const armed = loaderReadySlot(player) >= 0;
       drawLockLever(parts.lock, player.loaderLocked, machineStarted && armed);
-      if (player.loaderLocked) drawLoaderFireButton(parts.fire, machineStarted && armed);
+      drawLoaderFireButton(parts.fire, loaderFireLit(player));
       ctx.restore();
       if (near && machineStarted) drawInteractOutline(rect);
     }
 
     function pressLoader(player, room) {
       const parts = loaderParts(getLoaderRect(room));
-      if (player.loaderLocked && pointInRect(player.x, player.y, parts.fire)) {
+      if (pointInRect(player.x, player.y, parts.fire)) {
         pressLoaderFire(player);
         return;
       }
@@ -4089,8 +4161,9 @@
         return;
       }
       if (player.carryingShell) {
-        const deposit = stationNearHand(player, room);
-        if (!tryDepositShell(player, deposit)) dropCarriedShell(player);
+        const port = loaderParts(getLoaderRect(room)).port;
+        const overPort = pointInRect(player.x, player.y, port);
+        if (!tryDepositShell(player, overPort ? "loader-port" : "")) dropCarriedShell(player);
         return;
       }
       if (player.panelOpen) {
