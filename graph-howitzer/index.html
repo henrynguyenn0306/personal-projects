@@ -176,17 +176,50 @@
     const FIRE_STATION_WIDTH = 250;
     const FIRE_STATION_HEIGHT = 230;
     const FIRE_GRAPH_X_MAX = 100; // meters along the firing direction
-    const FIRE_EQUATION_MAX = 48;
+    const FIRE_EQUATION_MAX = 64;
     const FIRE_DEFAULT_EQUATION = "-0.05x^2 + 2x";
     const SHELL_SPEED = 20; // m/s along the path, not along the ground
-    const FIRE_KEY_COLS = 5;
+    const FIRE_KEY_COLS = 6;
+    // Compact grid. CLR and DONE are wider. √( and the other calls insert the opening parenthesis.
     const FIRE_KEYS = [
-      "7", "8", "9", "+", "sin",
-      "4", "5", "6", "-", "cos",
-      "1", "2", "3", "*", "sqrt",
-      "0", ".", "x", "/", "^",
-      "(", ")", "⌫", "CLR", "DONE"
+      { label: "7", insert: "7" },
+      { label: "8", insert: "8" },
+      { label: "9", insert: "9" },
+      { label: "+", insert: "+" },
+      { label: "-", insert: "-" },
+      { label: "⌫", backspace: true },
+      { label: "4", insert: "4" },
+      { label: "5", insert: "5" },
+      { label: "6", insert: "6" },
+      { label: "*", insert: "*" },
+      { label: "/", insert: "/" },
+      { label: "^", insert: "^" },
+      { label: "1", insert: "1" },
+      { label: "2", insert: "2" },
+      { label: "3", insert: "3" },
+      { label: "(", insert: "(" },
+      { label: ")", insert: ")" },
+      { label: "x²", insert: "^2" },
+      { label: "0", insert: "0" },
+      { label: ".", insert: "." },
+      { label: "x", insert: "x" },
+      { label: "π", insert: "π" },
+      { label: "e", insert: "e" },
+      { label: "√", insert: "√(" },
+      { label: "sin", insert: "sin(" },
+      { label: "cos", insert: "cos(" },
+      { label: "tan", insert: "tan(" },
+      { label: "log", insert: "log(" },
+      { label: "ln", insert: "ln(" },
+      { label: "abs", insert: "abs(" },
+      { label: "◀", move: -1 },
+      { label: "▶", move: 1 },
+      { label: "CLR", clear: true, span: 2 },
+      { label: "DONE", done: true, span: 2 }
     ];
+    // A call, including its opening parenthesis, is one caret step.
+    const FIRE_CARET_ATOMS = ["sqrt(", "sin(", "cos(", "tan(", "log(", "abs(", "ln(", "√("];
+    const FIRE_FUNCTIONS = { sin: true, cos: true, tan: true, sqrt: true, log: true, ln: true, abs: true };
     const STATE_PUBLISH_SECONDS = 0.1; // tell the viewer about 10 times a second
     // Gray and dark metal, like the rest of the console. Sizes below are fractions of the plate.
     const COLOR_JOYSTICK_PLATE = "#3a3a42";
@@ -212,8 +245,8 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, fireOpen: false, fireIndex: 0 };
-    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, fireOpen: false, fireIndex: 0 };
+    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0 };
+    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0 };
 
     // The wall sits in the middle. Each player owns one side of it.
     function getRooms() {
@@ -1499,12 +1532,93 @@
       const pad = zoomContent(room).keypad;
       const padRect = { x: pad.x, y: pad.y, width: pad.width, height: pad.height };
       if (!pointInRect(player.pointX, player.pointY, padRect)) return -1;
-      for (let i = 0; i < FIRE_KEYS.length; i++) {
-        const cell = fireKeyCell(pad, i);
+      const cells = fireKeyCells(pad);
+      for (let i = 0; i < cells.length; i++) {
+        const cell = cells[i];
         const rect = { x: cell.x, y: cell.y, width: cell.w, height: cell.h };
-        if (pointInRect(player.pointX, player.pointY, rect)) return i;
+        if (pointInRect(player.pointX, player.pointY, rect)) return cell.index;
       }
       return -1;
+    }
+
+    // Function calls stay in one piece. Everything else is a single character.
+    function equationAtoms(text) {
+      const atoms = [];
+      let i = 0;
+      while (i < text.length) {
+        let token = "";
+        for (let t = 0; t < FIRE_CARET_ATOMS.length; t++) {
+          const name = FIRE_CARET_ATOMS[t];
+          if (text.indexOf(name, i) === i) {
+            token = name;
+            break;
+          }
+        }
+        if (token) {
+          atoms.push({ start: i, end: i + token.length });
+          i += token.length;
+        } else {
+          atoms.push({ start: i, end: i + 1 });
+          i += 1;
+        }
+      }
+      return atoms;
+    }
+
+    function caretSnap(text, index) {
+      if (index <= 0) return 0;
+      if (index >= text.length) return text.length;
+      const atoms = equationAtoms(text);
+      for (let i = 0; i < atoms.length; i++) {
+        const atom = atoms[i];
+        if (index > atom.start && index < atom.end) {
+          return (index - atom.start) <= (atom.end - index) ? atom.start : atom.end;
+        }
+      }
+      return index;
+    }
+
+    function playerCaret(player) {
+      const text = player.equation || "";
+      if (typeof player.caret !== "number") return text.length;
+      return caretSnap(text, player.caret);
+    }
+
+    function caretMove(text, index, dir) {
+      const atoms = equationAtoms(text);
+      index = caretSnap(text, index);
+      if (dir < 0) {
+        for (let i = atoms.length - 1; i >= 0; i--) {
+          if (atoms[i].end <= index) return atoms[i].start;
+        }
+        return 0;
+      }
+      for (let i = 0; i < atoms.length; i++) {
+        if (atoms[i].start >= index) return atoms[i].end;
+      }
+      return text.length;
+    }
+
+    function caretDelete(text, index) {
+      index = caretSnap(text, index);
+      const atoms = equationAtoms(text);
+      for (let i = atoms.length - 1; i >= 0; i--) {
+        if (atoms[i].end <= index) {
+          return {
+            text: text.slice(0, atoms[i].start) + text.slice(atoms[i].end),
+            caret: atoms[i].start
+          };
+        }
+      }
+      return { text: text, caret: 0 };
+    }
+
+    function caretInsert(player, chunk) {
+      const text = player.equation || "";
+      const caret = playerCaret(player);
+      if (text.length + chunk.length > FIRE_EQUATION_MAX) return;
+      player.equation = text.slice(0, caret) + chunk + text.slice(caret);
+      player.caret = caret + chunk.length;
     }
 
     function pressFireKey(player) {
@@ -1512,42 +1626,61 @@
       player.pointPressFrom = frameTime;
       player.pointPressIndex = player.fireIndex;
       const key = FIRE_KEYS[player.fireIndex];
-      if (key === "DONE") {
+      if (!key) return;
+      if (key.done) {
         closeZoom(player);
         return;
       }
-      if (key === "CLR") {
+      if (key.clear) {
         player.equation = "";
+        player.caret = 0;
+        player.eqScroll = 0;
         return;
       }
-      if (key === "⌫") {
-        if (player.equation.length > 0) player.equation = player.equation.slice(0, -1);
+      if (key.backspace) {
+        const next = caretDelete(player.equation || "", playerCaret(player));
+        player.equation = next.text;
+        player.caret = next.caret;
         return;
       }
-      if (player.equation.length >= FIRE_EQUATION_MAX) return;
-      player.equation += key;
+      if (key.move) {
+        player.caret = caretMove(player.equation || "", playerCaret(player), key.move);
+        return;
+      }
+      if (key.insert) caretInsert(player, key.insert);
     }
 
-    // Break the equation into numbers, names, and symbols. Null means the text is not readable.
+    // Break the equation into numbers, names, and symbols. An error names the first bad spot.
     function tokenizeEquation(input) {
       const tokens = [];
+      const text = String(input || "");
       let i = 0;
-      while (i < input.length) {
-        const c = input.charAt(i);
+      while (i < text.length) {
+        const c = text.charAt(i);
         if (c === " " || c === "\t") {
           i += 1;
           continue;
         }
         if ("+-*/^()".indexOf(c) >= 0) {
-          tokens.push({ type: c });
+          tokens.push({ type: c, at: i });
+          i += 1;
+          continue;
+        }
+        if (c === "π") {
+          tokens.push({ type: "name", value: "pi", at: i });
+          i += 1;
+          continue;
+        }
+        if (c === "√") {
+          tokens.push({ type: "name", value: "sqrt", at: i });
           i += 1;
           continue;
         }
         if ((c >= "0" && c <= "9") || c === ".") {
           const start = i;
           let dots = 0;
-          while (i < input.length) {
-            const d = input.charAt(i);
+          while (i < text.length) {
+            const d = text.charAt(i);
             if (d >= "0" && d <= "9") {
               i += 1;
               continue;
@@ -1559,45 +1692,60 @@
             }
             break;
           }
-          const text = input.slice(start, i);
-          if (dots > 1 || text === ".") return null;
-          const value = Number(text);
-          if (!isFinite(value)) return null;
-          tokens.push({ type: "num", value: value });
+          const numberText = text.slice(start, i);
+          if (dots > 1 || numberText === ".") return { error: "bad number", errorAt: start };
+          const value = Number(numberText);
+          if (!isFinite(value)) return { error: "bad number", errorAt: start };
+          tokens.push({ type: "num", value: value, at: start });
           continue;
         }
         if ((c >= "a" && c <= "z") || (c >= "A" && c <= "Z")) {
           const start = i;
-          while (i < input.length) {
-            const d = input.charAt(i);
+          while (i < text.length) {
+            const d = text.charAt(i);
             if ((d >= "a" && d <= "z") || (d >= "A" && d <= "Z")) i += 1;
             else break;
           }
-          const name = input.slice(start, i).toLowerCase();
-          if (name !== "x" && name !== "sin" && name !== "cos" && name !== "sqrt") return null;
-          tokens.push({ type: "name", value: name });
+          const name = text.slice(start, i).toLowerCase();
+          if (!FIRE_FUNCTIONS[name] && name !== "x" && name !== "e" && name !== "pi") {
+            return { error: "unknown name", errorAt: start };
+          }
+          tokens.push({ type: "name", value: name, at: start });
           continue;
         }
-        return null;
+        return { error: "unknown symbol", errorAt: i };
       }
-      return tokens;
+      return { tokens: tokens };
     }
 
     // Recursive descent. ^ is tighter than * /, and * / is tighter than + -.
     // A minus in front of a value is a sign. 2x means 2 * x. No eval is used.
     function parseExpression(input) {
-      const tokens = tokenizeEquation(input);
-      if (!tokens || tokens.length === 0) return null;
+      const text = String(input || "");
+      if (!text.trim()) return { tree: null, error: "empty equation", errorAt: 0 };
+      const scanned = tokenizeEquation(text);
+      if (scanned.error) return { tree: null, error: scanned.error, errorAt: scanned.errorAt || 0 };
+      const tokens = scanned.tokens;
+      if (!tokens.length) return { tree: null, error: "empty equation", errorAt: 0 };
       let pos = 0;
+      let problem = "incomplete";
+      let problemAt = text.length;
 
       function peek() {
         if (pos >= tokens.length) return null;
         return tokens[pos];
       }
 
+      function mark(token, message) {
+        problem = message;
+        problemAt = token && typeof token.at === "number" ? token.at : text.length;
+      }
+
       function startsValue(token) {
         if (!token) return false;
-        return token.type === "num" || token.type === "name" || token.type === "(";
+        if (token.type === "num" || token.type === "(") return true;
+        if (token.type !== "name") return false;
+        return token.value === "x" || token.value === "e" || token.value === "pi" || !!FIRE_FUNCTIONS[token.value];
       }
 
       function parseExpr() {
@@ -1665,7 +1813,10 @@
 
       function parsePrimary() {
         const token = peek();
-        if (!token) return null;
+        if (!token) {
+          mark(null, "incomplete");
+          return null;
+        }
         if (token.type === "num") {
           pos += 1;
           return { op: "num", value: token.value };
@@ -1674,31 +1825,45 @@
           pos += 1;
           return { op: "x" };
         }
-        if (token.type === "name") {
+        if (token.type === "name" && (token.value === "e" || token.value === "pi")) {
           pos += 1;
-          if (peek() && peek().type === "(") {
-            pos += 1;
-          } else {
+          return { op: "num", value: token.value === "e" ? Math.E : Math.PI };
+        }
+        if (token.type === "name" && FIRE_FUNCTIONS[token.value]) {
+          pos += 1;
+          if (!peek() || peek().type !== "(") {
+            mark(peek() || token, "missing (");
             return null;
           }
+          pos += 1;
           const arg = parseExpr();
-          if (!arg || !peek() || peek().type !== ")") return null;
+          if (!arg) return null;
+          if (!peek() || peek().type !== ")") {
+            mark(peek(), "missing )");
+            return null;
+          }
           pos += 1;
           return { op: token.value, value: arg };
         }
         if (token.type === "(") {
           pos += 1;
           const inner = parseExpr();
-          if (!inner || !peek() || peek().type !== ")") return null;
+          if (!inner) return null;
+          if (!peek() || peek().type !== ")") {
+            mark(peek(), "missing )");
+            return null;
+          }
           pos += 1;
           return inner;
         }
+        mark(token, "unexpected symbol");
         return null;
       }
 
       const tree = parseExpr();
-      if (!tree || pos !== tokens.length) return null;
-      return tree;
+      if (!tree) return { tree: null, error: problem, errorAt: problemAt };
+      if (pos !== tokens.length) return { tree: null, error: "extra input", errorAt: tokens[pos].at };
+      return { tree: tree, error: "", errorAt: -1 };
     }
 
     function evalExpr(node, x) {
@@ -1708,7 +1873,11 @@
       if (node.op === "neg") return -evalExpr(node.value, x);
       if (node.op === "sin") return Math.sin(evalExpr(node.value, x));
       if (node.op === "cos") return Math.cos(evalExpr(node.value, x));
+      if (node.op === "tan") return Math.tan(evalExpr(node.value, x));
       if (node.op === "sqrt") return Math.sqrt(evalExpr(node.value, x));
+      if (node.op === "log") return Math.log(evalExpr(node.value, x)) / Math.LN10;
+      if (node.op === "ln") return Math.log(evalExpr(node.value, x));
+      if (node.op === "abs") return Math.abs(evalExpr(node.value, x));
       const a = evalExpr(node.left, x);
       const b = evalExpr(node.right, x);
       if (node.op === "+") return a + b;
@@ -1722,8 +1891,12 @@
     function syncEquation(player) {
       if (player.equationParsedFor === player.equation) return;
       player.equationParsedFor = player.equation;
-      player.equationTree = parseExpression(player.equation);
-      player.flight = player.equationTree ? traceEquation(player.equationTree) : null;
+      const parsed = parseExpression(player.equation);
+      player.equationTree = parsed.tree;
+      player.equationError = parsed.error || "";
+      player.equationErrorAt = typeof parsed.errorAt === "number" ? parsed.errorAt : -1;
+      player.flight = parsed.tree ? traceEquation(parsed.tree) : null;
+      player.canFire = !!(parsed.tree && player.flight && player.flight.impact);
     }
 
     // Shared with the battlefield viewer. The impact is bisected, and the
@@ -1739,14 +1912,101 @@
     }
 
     function impactLines(player) {
-      if (!player.equationTree || !player.flight) return ["Syntax error"];
-      if (!player.flight.impact) return ["No impact within range"];
+      if (!player.equationTree || !player.flight) {
+        const reason = player.equationError ? player.equationError : "syntax error";
+        return ["Syntax error: " + reason, "Cannot fire: syntax error"];
+      }
+      if (!player.flight.impact) return ["No impact within range", "Cannot fire: no impact"];
       const flight = player.flight;
       return [
         "Impact distance: " + flight.distance.toFixed(1) + " m",
         "Peak height: " + flight.peak.toFixed(1) + " m",
         "Flight time: " + flight.time.toFixed(1) + " s"
       ];
+    }
+
+    function stationFireNote(player) {
+      if (!player.canFire) {
+        if (!player.equationTree) return "Cannot fire: syntax error";
+        return "Cannot fire: no impact";
+      }
+      const flight = player.flight;
+      return flight.distance.toFixed(1) + " m · " + flight.peak.toFixed(1) + " m · " + flight.time.toFixed(1) + " s";
+    }
+
+    // Keep the caret inside the black bar when the formula is wider than the field.
+    function equationScroll(rect, player, font) {
+      ctx.font = font;
+      const caret = playerCaret(player);
+      const caretX = ctx.measureText("a = " + player.equation.slice(0, caret)).width;
+      const view = Math.max(8, rect.width - 16);
+      let scroll = player.eqScroll || 0;
+      if (caretX - scroll > view - 2) scroll = caretX - view + 2;
+      if (caretX - scroll < 0) scroll = caretX;
+      if (scroll < 0) scroll = 0;
+      player.eqScroll = scroll;
+      return scroll;
+    }
+
+    function caretFromPoint(player, x, rect) {
+      const font = "16px monospace";
+      ctx.font = font;
+      const text = player.equation || "";
+      const scroll = player.eqScroll || 0;
+      const origin = rect.x + 8 - scroll;
+      const atoms = equationAtoms(text);
+      const stops = [0];
+      for (let i = 0; i < atoms.length; i++) stops.push(atoms[i].end);
+      let best = 0;
+      let bestDist = Infinity;
+      for (let i = 0; i < stops.length; i++) {
+        const width = ctx.measureText("a = " + text.slice(0, stops[i])).width;
+        const dist = Math.abs(x - (origin + width));
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = stops[i];
+        }
+      }
+      return best;
+    }
+
+    // The formula always stays on screen. A syntax error tints it and underlines the bad spot.
+    function drawEquationField(rect, player, font, showCaret) {
+      ctx.fillStyle = "#000000";
+      ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(rect.x, rect.y, rect.width, rect.height);
+      ctx.clip();
+      ctx.font = font;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      const text = player.equation || "";
+      const bad = !player.equationTree;
+      const scroll = showCaret ? equationScroll(rect, player, font) : 0;
+      const origin = rect.x + 8 - scroll;
+      const baseline = rect.y + rect.height / 2;
+      ctx.fillStyle = bad ? COLOR_MONITOR_WARNING : COLOR_MONITOR_TEXT;
+      ctx.fillText("a = " + text, origin, baseline);
+      if (bad && typeof player.equationErrorAt === "number" && player.equationErrorAt >= 0 && player.equationErrorAt <= text.length) {
+        const before = "a = " + text.slice(0, player.equationErrorAt);
+        const mark = text.charAt(player.equationErrorAt) || " ";
+        const x0 = origin + ctx.measureText(before).width;
+        const markW = Math.max(6, ctx.measureText(mark).width);
+        ctx.strokeStyle = COLOR_MONITOR_WARNING;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x0, rect.y + rect.height - 5);
+        ctx.lineTo(x0 + markW, rect.y + rect.height - 5);
+        ctx.stroke();
+      }
+      if (showCaret && Math.floor(frameTime / 530) % 2 === 0) {
+        const caret = playerCaret(player);
+        const caretX = origin + ctx.measureText("a = " + text.slice(0, caret)).width;
+        ctx.fillStyle = bad ? COLOR_MONITOR_WARNING : COLOR_MONITOR_TEXT;
+        ctx.fillRect(caretX, rect.y + 6, 2, rect.height - 12);
+      }
+      ctx.restore();
     }
 
     function niceTickStep(span) {
@@ -1877,7 +2137,7 @@
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(label, rect.x + rect.width / 2 - 8, rect.y + rect.height - 16);
-      ctx.fillStyle = machineStarted ? COLOR_JOYSTICK_LED_ON : COLOR_JOYSTICK_LED_OFF;
+      ctx.fillStyle = !machineStarted ? COLOR_JOYSTICK_LED_OFF : (player.canFire ? COLOR_JOYSTICK_LED_ON : COLOR_REFUEL_LED);
       ctx.beginPath();
       ctx.arc(rect.x + rect.width - inset - 8, rect.y + rect.height - 16, 3.5, 0, Math.PI * 2);
       ctx.fill();
@@ -1896,33 +2156,12 @@
         ctx.restore();
         return;
       }
-      ctx.fillStyle = "#000000";
-      ctx.fillRect(innerX, innerY, innerW, eqH);
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(innerX, innerY, innerW, eqH);
-      ctx.clip();
-      ctx.textAlign = "left";
-      ctx.textBaseline = "middle";
-      if (player.equationTree) {
-        ctx.font = "12px monospace";
-        ctx.fillStyle = COLOR_MONITOR_TEXT;
-        ctx.fillText("y = " + player.equation, innerX + 6, innerY + eqH / 2);
-      } else {
-        ctx.font = "12px monospace";
-        ctx.fillStyle = COLOR_MONITOR_WARNING;
-        ctx.fillText("Syntax error", innerX + 6, innerY + eqH / 2);
-      }
-      ctx.restore();
-      const note = impactLines(player);
+      drawEquationField({ x: innerX, y: innerY, width: innerW, height: eqH }, player, "12px monospace", false);
       ctx.font = "10px monospace";
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
-      ctx.fillStyle = player.equationTree && player.flight && player.flight.impact ? COLOR_MONITOR_TEXT : COLOR_MONITOR_WARNING;
-      const brief = note.length === 3
-        ? note[0].replace("Impact distance: ", "") + " · " + note[1].replace("Peak height: ", "") + " · " + note[2].replace("Flight time: ", "")
-        : note[0];
-      ctx.fillText(brief, innerX + 4, innerY + eqH + noteH / 2 + 2);
+      ctx.fillStyle = player.canFire ? COLOR_MONITOR_TEXT : COLOR_MONITOR_WARNING;
+      ctx.fillText(stationFireNote(player), innerX + 4, innerY + eqH + noteH / 2 + 2);
 
       if (graphH > 20 && innerW > 20) {
         drawShellGraph(
@@ -1935,62 +2174,87 @@
       if (near && machineStarted) drawInteractOutline(rect);
     }
 
-    // One keypad cell. The pointing fingertip uses this same center.
-    function fireKeyCell(rect, index) {
+    function fireKeyPlacements() {
       const cols = FIRE_KEY_COLS;
-      const rows = Math.ceil(FIRE_KEYS.length / cols);
-      const gridX = rect.x + 8;
-      const gridY = rect.y + 28;
-      const cellW = (rect.width - 16) / cols;
-      const cellH = (rect.height - 38) / rows;
-      const col = index % cols;
-      const row = Math.floor(index / cols);
-      const x = gridX + col * cellW;
-      const y = gridY + row * cellH;
-      return { x: x, y: y, w: cellW, h: cellH, cx: x + cellW / 2, cy: y + cellH / 2 };
+      const placed = [];
+      let col = 0;
+      let row = 0;
+      for (let i = 0; i < FIRE_KEYS.length; i++) {
+        const span = FIRE_KEYS[i].span || 1;
+        if (col + span > cols) {
+          col = 0;
+          row += 1;
+        }
+        placed.push({ index: i, col: col, row: row, span: span });
+        col += span;
+        if (col >= cols) {
+          col = 0;
+          row += 1;
+        }
+      }
+      return { cols: cols, rows: col === 0 ? row : row + 1, placed: placed };
     }
 
-    // The right half of the fire zoom window. Same keys as the old floor overlay.
+    // Preferred size of the compact pad. It shrinks if the zoom window is small.
+    function firePadMetrics(maxW, maxH) {
+      const layout = fireKeyPlacements();
+      const inset = 4;
+      let cellW = 34;
+      let cellH = 26;
+      let width = cellW * layout.cols + inset * 2;
+      let height = cellH * layout.rows + inset * 2;
+      if (maxW && width > maxW) width = maxW;
+      if (maxH && height > maxH) height = maxH;
+      return { width: width, height: height };
+    }
+
+    function fireKeyCells(rect) {
+      const layout = fireKeyPlacements();
+      const inset = 3;
+      const cellW = (rect.width - inset * 2) / layout.cols;
+      const cellH = (rect.height - inset * 2) / layout.rows;
+      const cells = [];
+      for (let i = 0; i < layout.placed.length; i++) {
+        const item = layout.placed[i];
+        const x = rect.x + inset + item.col * cellW;
+        const y = rect.y + inset + item.row * cellH;
+        const w = cellW * item.span;
+        cells.push({ index: item.index, x: x, y: y, w: w, h: cellH, cx: x + w / 2, cy: y + cellH / 2 });
+      }
+      return cells;
+    }
+
+    // The right side of the fire zoom window. Buttons stay small instead of stretching.
     function drawFireKeys(rect, player) {
       ctx.save();
       ctx.fillStyle = COLOR_JOYSTICK_WELL;
       ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
-      ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
-      ctx.font = "bold 12px sans-serif";
-      ctx.textAlign = "left";
-      ctx.textBaseline = "middle";
-      ctx.fillText("KEYPAD", rect.x + 8, rect.y + 14);
-
+      const cells = fireKeyCells(rect);
       const pressAge = (typeof player.pointPressFrom === "number" && player.pointPressFrom >= 0)
         ? (frameTime - player.pointPressFrom) / 1000
         : -1;
       const pressTotal = POINT_PRESS_DOWN_SECONDS + POINT_PRESS_UP_SECONDS;
-      for (let i = 0; i < FIRE_KEYS.length; i++) {
-        const cell = fireKeyCell(rect, i);
-        const selected = i === player.fireIndex;
+      const fontPx = cells.length ? Math.max(9, Math.min(12, Math.floor(cells[0].h * 0.46))) : 11;
+      for (let i = 0; i < cells.length; i++) {
+        const cell = cells[i];
+        const selected = cell.index === player.fireIndex;
         ctx.fillStyle = selected ? "#1c3a28" : "#101014";
-        ctx.fillRect(cell.x + 2, cell.y + 2, cell.w - 4, cell.h - 4);
+        ctx.fillRect(cell.x + 1, cell.y + 1, cell.w - 2, cell.h - 2);
         if (selected) {
           ctx.strokeStyle = COLOR_MONITOR_TEXT;
-          ctx.lineWidth = 2;
-          ctx.strokeRect(cell.x + 2, cell.y + 2, cell.w - 4, cell.h - 4);
+          ctx.lineWidth = 1;
+          ctx.strokeRect(cell.x + 1, cell.y + 1, cell.w - 2, cell.h - 2);
         }
-        // A short flash and ring on the key the finger just pressed.
-        if (i === player.pointPressIndex && pressAge >= 0 && pressAge < pressTotal) {
+        if (cell.index === player.pointPressIndex && pressAge >= 0 && pressAge < pressTotal) {
           const t = pressAge / pressTotal;
           ctx.fillStyle = "rgba(210, 255, 230, " + (0.4 * (1 - t)).toFixed(3) + ")";
-          ctx.fillRect(cell.x + 2, cell.y + 2, cell.w - 4, cell.h - 4);
-          ctx.strokeStyle = "rgba(230, 255, 240, " + (0.85 * (1 - t)).toFixed(3) + ")";
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.arc(cell.cx, cell.cy, 4 + t * Math.min(cell.w, cell.h) * 0.42, 0, Math.PI * 2);
-          ctx.stroke();
+          ctx.fillRect(cell.x + 1, cell.y + 1, cell.w - 2, cell.h - 2);
         }
         ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
-        ctx.font = "bold 14px sans-serif";
+        ctx.font = "bold " + fontPx + "px sans-serif";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillText(FIRE_KEYS[i], cell.cx, cell.cy);
+        ctx.fillText(FIRE_KEYS[cell.index].label, cell.cx, cell.cy);
       }
       ctx.restore();
     }
@@ -2238,36 +2502,15 @@
       syncEquation(player);
       const screenX = view.screenX;
       const screenY = view.screenY;
-      const screenW = view.screenW;
       const screenH = view.screenH;
-      const gap = 10;
-      const leftW = Math.floor((screenW - gap) * 0.62);
-      const rightX = view.keypad.x;
-      const rightW = view.keypad.width;
-      const eqH = 34;
+      const eq = view.equation;
       const infoH = 78;
-      ctx.fillStyle = "#000000";
-      ctx.fillRect(screenX, screenY, leftW, eqH);
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(screenX, screenY, leftW, eqH);
-      ctx.clip();
-      ctx.font = "16px monospace";
-      ctx.textAlign = "left";
-      ctx.textBaseline = "middle";
-      if (player.equationTree) {
-        ctx.fillStyle = COLOR_MONITOR_TEXT;
-        ctx.fillText("y = " + player.equation, screenX + 8, screenY + eqH / 2);
-      } else {
-        ctx.fillStyle = COLOR_MONITOR_WARNING;
-        ctx.fillText("Syntax error", screenX + 8, screenY + eqH / 2);
-      }
-      ctx.restore();
+      drawEquationField(eq, player, "16px monospace", true);
 
-      const graphY = screenY + eqH + 8;
-      const graphH = screenH - eqH - infoH - 16;
+      const graphY = screenY + eq.height + 8;
+      const graphH = screenH - eq.height - infoH - 16;
       if (graphH > 24) {
-        drawFireArcView({ x: screenX, y: graphY, w: leftW, h: graphH }, player);
+        drawFireArcView({ x: screenX, y: graphY, w: eq.width, h: graphH }, player);
       }
 
       const lines = impactLines(player);
@@ -2275,11 +2518,11 @@
       ctx.font = "15px monospace";
       ctx.textAlign = "left";
       ctx.textBaseline = "top";
-      ctx.fillStyle = lines.length === 3 ? COLOR_MONITOR_TEXT : COLOR_MONITOR_WARNING;
+      ctx.fillStyle = player.canFire ? COLOR_MONITOR_TEXT : COLOR_MONITOR_WARNING;
       for (let i = 0; i < lines.length; i++) {
         ctx.fillText(lines[i], screenX + 4, infoY + i * 24);
       }
-      drawFireKeys({ x: rightX, y: screenY, width: rightW, height: screenH }, player);
+      drawFireKeys(view.keypad, player);
     }
 
     function interactOutlineStyle() {
@@ -2896,10 +3139,15 @@
         return;
       }
       const keyIndex = keyUnderPoint(player, room);
-      player.pointPressIndex = keyIndex;
-      if (keyIndex < 0) return;
-      player.fireIndex = keyIndex;
-      pressFireKey(player);
+      if (keyIndex >= 0) {
+        player.pointPressIndex = keyIndex;
+        player.fireIndex = keyIndex;
+        pressFireKey(player);
+        return;
+      }
+      player.pointPressIndex = -1;
+      const equation = zoomContent(room).equation;
+      if (pointInRect(tip.x, tip.y, equation)) player.caret = caretFromPoint(player, tip.x, equation);
     }
 
     // Screen area inside a zoom frame, plus the fire keypad on its right half.
@@ -2910,19 +3158,22 @@
       const screenY = panel.y + bezel + 8;
       const screenW = panel.width - bezel * 2;
       const screenH = panel.height - bezel * 2 - 8;
-      const gap = 10;
-      const leftW = Math.floor((screenW - gap) * 0.62);
+      const gap = 8;
+      const pad = firePadMetrics(Math.floor(screenW * 0.46), screenH);
+      const leftW = Math.max(48, screenW - gap - pad.width);
+      const eqH = 34;
       return {
         panel: panel,
         screenX: screenX,
         screenY: screenY,
         screenW: screenW,
         screenH: screenH,
+        equation: { x: screenX, y: screenY, width: leftW, height: eqH },
         keypad: {
           x: screenX + leftW + gap,
           y: screenY,
-          width: screenW - leftW - gap,
-          height: screenH
+          width: pad.width,
+          height: Math.min(screenH, pad.height)
         }
       };
     }
@@ -3334,8 +3585,13 @@
 
     // The viewer reads the fire-station equation and the facing off each machine.
     function publishFireState(player, unit) {
+      syncEquation(player);
       if (unit.equation !== player.equation) {
         unit.equation = player.equation;
+        battlefieldDirty = true;
+      }
+      if (unit.canFire !== player.canFire) {
+        unit.canFire = player.canFire;
         battlefieldDirty = true;
       }
       updateFacing(player, unit);
@@ -3368,6 +3624,7 @@
           vy: 0,
           fuel: MAX_FUEL,
           equation: FIRE_DEFAULT_EQUATION,
+          canFire: true,
           aimX: 0,
           aimY: 0,
           aimSet: false

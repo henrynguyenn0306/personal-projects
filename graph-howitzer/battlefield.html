@@ -452,6 +452,16 @@
           i += 1;
           continue;
         }
+        if (c === "π") {
+          tokens.push({ type: "name", value: "pi" });
+          i += 1;
+          continue;
+        }
+        if (c === "√") {
+          tokens.push({ type: "name", value: "sqrt" });
+          i += 1;
+          continue;
+        }
         if ((c >= "0" && c <= "9") || c === ".") {
           const start = i;
           let dots = 0;
@@ -483,7 +493,7 @@
             else break;
           }
           const name = text.slice(start, i).toLowerCase();
-          if (name !== "x" && name !== "sin" && name !== "cos" && name !== "sqrt") return null;
+          if (name !== "x" && name !== "e" && name !== "pi" && name !== "sin" && name !== "cos" && name !== "tan" && name !== "sqrt" && name !== "log" && name !== "ln" && name !== "abs") return null;
           tokens.push({ type: "name", value: name });
           continue;
         }
@@ -580,6 +590,10 @@
           pos += 1;
           return { op: "x" };
         }
+        if (token.type === "name" && (token.value === "e" || token.value === "pi")) {
+          pos += 1;
+          return { op: "num", value: token.value === "e" ? Math.E : Math.PI };
+        }
         if (token.type === "name") {
           pos += 1;
           if (peek() && peek().type === "(") {
@@ -614,7 +628,11 @@
       if (node.op === "neg") return -evalExpr(node.value, x);
       if (node.op === "sin") return Math.sin(evalExpr(node.value, x));
       if (node.op === "cos") return Math.cos(evalExpr(node.value, x));
+      if (node.op === "tan") return Math.tan(evalExpr(node.value, x));
       if (node.op === "sqrt") return Math.sqrt(evalExpr(node.value, x));
+      if (node.op === "log") return Math.log(evalExpr(node.value, x)) / Math.LN10;
+      if (node.op === "ln") return Math.log(evalExpr(node.value, x));
+      if (node.op === "abs") return Math.abs(evalExpr(node.value, x));
       const a = evalExpr(node.left, x);
       const b = evalExpr(node.right, x);
       if (node.op === "+") return a + b;
