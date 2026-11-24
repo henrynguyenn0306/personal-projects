@@ -177,6 +177,7 @@
     const EQUATION_PREFIX = "y = ";
     const SHELL_SPEED = 20; // m/s along the path, not along the ground
     const SHELL_STORAGE_COUNT = 9;
+    const SHELL_CARRIED_LENGTH = 78; // carried and falling shell, in pixels
     const SHELL_CARRY_RATIO = 0.5; // a carried shell slows the room hand to half speed
     const SHELL_RESTOCK_SECONDS = 60;
     const SHELL_FALL_GRAVITY = 1600; // px/s squared; a dropped shell leaves the bottom quickly
@@ -678,7 +679,7 @@
     function drawHand(hand, color) {
       const pose = (hand.gripping || hand.holdingStart || hand.carryingShell) ? "hold" : "open";
       drawHandShape(hand.x, hand.y, color, pose);
-      if (hand.carryingShell) drawShellGlyph(hand.x + 2, hand.y - 16, 42, -0.35);
+      if (hand.carryingShell) drawShellGlyph(hand.x, hand.y, SHELL_CARRIED_LENGTH, 0);
     }
 
     // 0 at rest, 1 at the bottom of the press, then back to 0.
@@ -980,9 +981,12 @@
         fireW = inner - joy - fuelW;
       }
       const storageY = top + joy + rowGap;
-      let storageH = joy;
+      // Wider than the stick column so the larger shell has side room, shorter so the
+      // well hugs it. Same left inset and the same gap under the stick row.
+      let storageW = Math.min(inner, Math.max(joy + fuelW + rowGap, joy * 1.45));
+      let storageH = Math.min(joy * 0.72, Math.max(110, storageW * 0.46));
       if (canvas.height - (storageY + storageH) < rowGap) {
-        storageH = Math.max(48, canvas.height - storageY - rowGap);
+        storageH = Math.max(72, canvas.height - storageY - rowGap);
       }
       return {
         joystick: {
@@ -998,12 +1002,10 @@
           width: fireW,
           height: joy
         },
-        // Same left edge and width as the stick plus its fuel column. The floor to the
-        // right stays open for the loader.
         storage: {
           x: room.left + rowGap,
           y: storageY,
-          width: joy + fuelW,
+          width: storageW,
           height: storageH
         }
       };
@@ -1580,6 +1582,7 @@
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate(angle);
+      ctx.translate(-nose / 2, 0);
       ctx.fillStyle = "#d2b36a";
       ctx.beginPath();
       ctx.moveTo(-body / 2 + h / 2, -h / 2);
@@ -1630,6 +1633,14 @@
       }
     }
 
+    function drawRenewingLabel(well) {
+      ctx.fillStyle = COLOR_REFUEL_LED;
+      ctx.font = "bold 13px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("RENEWING 60s", well.x + well.w / 2, well.y + well.h / 2);
+    }
+
     function drawShellStorage(room, player) {
       const rect = getStorageRect(room);
       const near = stationNearHand(player, room) === "storage";
@@ -1649,11 +1660,12 @@
       ctx.fillStyle = machineStarted ? "#10140f" : "#000000";
       ctx.fillRect(well.x, well.y, well.w, well.h);
       if (machineStarted && player.shells > 0 && player.hatch < 0.98) {
-        const length = Math.max(18, Math.min(well.w * 0.62, well.h * 0.7));
+        const length = Math.max(28, Math.min(well.w * 0.82, well.h * 0.72 / 0.28));
         const noseRight = player === player1;
         drawShellGlyph(well.x + well.w / 2, well.y + well.h / 2, length, noseRight ? 0 : Math.PI);
       }
       drawStorageHatches(well, machineStarted ? player.hatch : 0);
+      if (machineStarted && !open && player.hatch > 0.65) drawRenewingLabel(well);
       ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
       ctx.font = "bold 11px sans-serif";
       ctx.textAlign = "center";
@@ -1673,7 +1685,7 @@
     function drawFallingShells() {
       for (let i = 0; i < fallingShells.length; i++) {
         const shell = fallingShells[i];
-        drawShellGlyph(shell.x, shell.y, 34, shell.rot);
+        drawShellGlyph(shell.x, shell.y, SHELL_CARRIED_LENGTH, shell.rot);
       }
     }
 
@@ -1716,14 +1728,14 @@
       if (player.shells <= 0) {
         player.shells = 0;
         player.storageClosedAt = frameTime;
-        addStatusMessage(player, "> Storage: Empty. Hatches closed.");
+        addStatusMessage(player, "> Storage: Empty. Hatches closed. Renewing (60s).");
       }
     }
 
     function dropCarriedShell(player) {
       if (!player.carryingShell) return;
       player.carryingShell = false;
-      fallingShells.push({ x: player.x + 8, y: player.y - 2, vy: 80, rot: -0.6 });
+      fallingShells.push({ x: player.x, y: player.y, vy: 80, rot: 0 });
       addStatusMessage(player, "> Storage: Shell dropped. Lost.");
     }
 
@@ -3615,6 +3627,23 @@
       }
     }
 
+    // A long log line continues underneath instead of running off the screen.
+    function messageLines(text, maxWidth) {
+      if (ctx.measureText(text).width <= maxWidth) return [text];
+      const words = text.split(" ");
+      const lines = [];
+      let current = "";
+      for (let i = 0; i < words.length; i++) {
+        const next = current ? current + " " + words[i] : words[i];
+        if (current && ctx.measureText(next).width > maxWidth) {
+          lines.push(current);
+          current = words[i];
+        } else current = next;
+      }
+      if (current) lines.push(current);
+      return lines.length ? lines : [text];
+    }
+
     function drawMessageList(player, screenX, screenY, screenW, screenH, fontSize, lineHeight) {
       // The pinned status keeps a strip at the bottom. Log lines stop above it.
       const barH = machineStarted ? lineHeight + 8 : 0;
@@ -3628,12 +3657,17 @@
       ctx.textAlign = "left";
       ctx.textBaseline = "top";
       const maxLines = Math.max(1, Math.floor((logH - 8) / lineHeight));
-      const start = Math.max(0, player.messages.length - maxLines);
-      for (let i = start; i < player.messages.length; i++) {
+      const maxWidth = Math.max(8, screenW - 16);
+      const wrapped = [];
+      for (let i = 0; i < player.messages.length; i++) {
         const entry = player.messages[i];
-        ctx.fillStyle = messageColor(entry);
-        const line = i - start;
-        ctx.fillText(messageText(entry), screenX + 8, screenY + 6 + line * lineHeight);
+        const parts = messageLines(messageText(entry), maxWidth);
+        for (let p = 0; p < parts.length; p++) wrapped.push({ text: parts[p], color: messageColor(entry) });
+      }
+      const start = Math.max(0, wrapped.length - maxLines);
+      for (let i = start; i < wrapped.length; i++) {
+        ctx.fillStyle = wrapped[i].color;
+        ctx.fillText(wrapped[i].text, screenX + 8, screenY + 6 + (i - start) * lineHeight);
       }
       ctx.restore();
 
