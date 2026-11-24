@@ -1634,11 +1634,18 @@
     }
 
     function drawRenewingLabel(well) {
+      const label = "Renewing shells in 1 minute";
+      let fontPx = 13;
       ctx.fillStyle = COLOR_REFUEL_LED;
-      ctx.font = "bold 13px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText("RENEWING 60s", well.x + well.w / 2, well.y + well.h / 2);
+      ctx.font = "bold " + fontPx + "px sans-serif";
+      const maxWidth = Math.max(8, well.w - 16);
+      while (fontPx > 9 && ctx.measureText(label).width > maxWidth) {
+        fontPx -= 1;
+        ctx.font = "bold " + fontPx + "px sans-serif";
+      }
+      ctx.fillText(label, well.x + well.w / 2, well.y + well.h / 2);
     }
 
     function drawShellStorage(room, player) {
@@ -1728,7 +1735,7 @@
       if (player.shells <= 0) {
         player.shells = 0;
         player.storageClosedAt = frameTime;
-        addStatusMessage(player, "> Storage: Empty. Hatches closed. Renewing (60s).");
+        addStatusMessage(player, "> Storage: Empty. Hatches closed. Renewing shells in 1 minute.");
       }
     }
 
