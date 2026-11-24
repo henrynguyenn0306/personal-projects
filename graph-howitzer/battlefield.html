@@ -32,6 +32,20 @@
       pointer-events: none;
     }
     #message[hidden] { display: none; }
+    #tip {
+      position: fixed;
+      z-index: 3;
+      pointer-events: none;
+      background: rgba(20, 20, 30, 0.92);
+      color: #f2f2f7;
+      border: 1px solid #5c5c6c;
+      border-radius: 4px;
+      padding: 6px 8px;
+      font: 13px sans-serif;
+      line-height: 1.35;
+      white-space: pre;
+    }
+    #tip[hidden] { display: none; }
   </style>
   <script type="importmap">
     {
@@ -45,6 +59,7 @@
 <body>
   <button id="reset" type="button">Reset view</button>
   <div id="message">Open the game first</div>
+  <div id="tip" hidden></div>
 
   <script type="module">
     import * as THREE from "three";
@@ -114,13 +129,20 @@
     const labels = [];
     const obstaclesGroup = new THREE.Group();
     const machinesGroup = new THREE.Group();
+    const arcsGroup = new THREE.Group();
     scene.add(obstaclesGroup);
     scene.add(machinesGroup);
+    scene.add(arcsGroup);
 
     let battlefield = null;
     let fieldReady = false;
     let obstacleSignature = "";
-    const machineLabels = [];
+    const arcKeys = ["", ""];
+    const arcObjects = [null, null];
+    const tip = document.getElementById("tip");
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    let pointerInside = false;
 
     function showMessage(text) {
       message.textContent = text;
@@ -163,31 +185,6 @@
       sprite.userData.text = text;
       labels.push(sprite);
       return sprite;
-    }
-
-    function setSpriteText(sprite, text) {
-      if (sprite.userData.text === text) return;
-      const previous = sprite.material.map;
-      const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
-      const fontSize = 64;
-      ctx.font = "bold " + fontSize + "px sans-serif";
-      const textWidth = Math.ceil(ctx.measureText(text).width);
-      canvas.width = textWidth + 24;
-      canvas.height = 80;
-      ctx.font = "bold " + fontSize + "px sans-serif";
-      ctx.textBaseline = "middle";
-      ctx.lineWidth = 10;
-      ctx.strokeStyle = "rgba(0, 0, 0, 0.8)";
-      ctx.strokeText(text, 12, 40);
-      ctx.fillStyle = "#ffffff";
-      ctx.fillText(text, 12, 40);
-      const texture = new THREE.CanvasTexture(canvas);
-      texture.colorSpace = THREE.SRGBColorSpace;
-      sprite.material.map = texture;
-      sprite.userData.aspect = canvas.width / canvas.height;
-      sprite.userData.text = text;
-      if (previous) previous.dispose();
     }
 
     function updateLabelScale() {
@@ -364,14 +361,10 @@
       }
     }
 
-    function makeMachine(color) {
-      return flatFootprint("rect", PLAYER_SIZE, PLAYER_SIZE, color);
-    }
-
-    function playerCaption(index, player) {
-      const name = index === 0 ? "P1" : "P2";
-      if (player.fuel === undefined || player.fuel === null) return name;
-      return name + " " + Math.round(player.fuel) + "%";
+    function makeMachine(color, index) {
+      const shape = flatFootprint("rect", PLAYER_SIZE, PLAYER_SIZE, color);
+      shape.userData.playerIndex = index;
+      return shape;
     }
 
     function syncPlayers() {
@@ -379,20 +372,435 @@
       const colors = [COLOR_P1, COLOR_P2];
       while (machinesGroup.children.length < players.length) {
         const index = machinesGroup.children.length;
-        const machine = makeMachine(colors[index] || COLOR_P1);
-        machinesGroup.add(machine);
-        const label = makeTextSprite(playerCaption(index, players[index]));
-        scene.add(label);
-        machineLabels.push(label);
+        machinesGroup.add(makeMachine(colors[index] || COLOR_P1, index));
       }
       for (let i = 0; i < players.length; i++) {
         const player = players[i];
         const machine = machinesGroup.children[i];
         machine.position.set(worldX(player.x), 0, worldZ(player.y));
-        const label = machineLabels[i];
-        setSpriteText(label, playerCaption(i, player));
-        label.position.set(worldX(player.x), 4, worldZ(player.y));
       }
+    }
+
+    // Same safe parser as the fire station. No eval or Function is used.
+    const ARC_MAX_METERS = 100;
+    const ARC_SAMPLE_STEP = 0.5;
+    const ARC_INTEGRATION_STEP = 0.05;
+
+    function tokenizeEquation(input) {
+      const tokens = [];
+      let i = 0;
+      const text = String(input || "");
+      while (i < text.length) {
+        const c = text.charAt(i);
+        if (c === " " || c === "\t") {
+          i += 1;
+          continue;
+        }
+        if ("+-*/^()".indexOf(c) >= 0) {
+          tokens.push({ type: c });
+          i += 1;
+          continue;
+        }
+        if ((c >= "0" && c <= "9") || c === ".") {
+          const start = i;
+          let dots = 0;
+          while (i < text.length) {
+            const d = text.charAt(i);
+            if (d >= "0" && d <= "9") {
+              i += 1;
+              continue;
+            }
+            if (d === ".") {
+              dots += 1;
+              i += 1;
+              continue;
+            }
+            break;
+          }
+          const numberText = text.slice(start, i);
+          if (dots > 1 || numberText === ".") return null;
+          const value = Number(numberText);
+          if (!isFinite(value)) return null;
+          tokens.push({ type: "num", value: value });
+          continue;
+        }
+        if ((c >= "a" && c <= "z") || (c >= "A" && c <= "Z")) {
+          const start = i;
+          while (i < text.length) {
+            const d = text.charAt(i);
+            if ((d >= "a" && d <= "z") || (d >= "A" && d <= "Z")) i += 1;
+            else break;
+          }
+          const name = text.slice(start, i).toLowerCase();
+          if (name !== "x" && name !== "sin" && name !== "cos" && name !== "sqrt") return null;
+          tokens.push({ type: "name", value: name });
+          continue;
+        }
+        return null;
+      }
+      return tokens;
+    }
+
+    function parseExpression(input) {
+      const tokens = tokenizeEquation(input);
+      if (!tokens || tokens.length === 0) return null;
+      let pos = 0;
+
+      function peek() {
+        if (pos >= tokens.length) return null;
+        return tokens[pos];
+      }
+
+      function startsValue(token) {
+        if (!token) return false;
+        return token.type === "num" || token.type === "name" || token.type === "(";
+      }
+
+      function parseExpr() {
+        let left = parseTerm();
+        if (!left) return null;
+        while (peek() && (peek().type === "+" || peek().type === "-")) {
+          const op = peek().type;
+          pos += 1;
+          const right = parseTerm();
+          if (!right) return null;
+          left = { op: op, left: left, right: right };
+        }
+        return left;
+      }
+
+      function parseTerm() {
+        let left = parseUnary();
+        if (!left) return null;
+        while (peek()) {
+          const token = peek();
+          if (token.type === "*" || token.type === "/") {
+            pos += 1;
+            const right = parseUnary();
+            if (!right) return null;
+            left = { op: token.type, left: left, right: right };
+            continue;
+          }
+          if (startsValue(token)) {
+            const right = parseUnary();
+            if (!right) return null;
+            left = { op: "*", left: left, right: right };
+            continue;
+          }
+          break;
+        }
+        return left;
+      }
+
+      function parseUnary() {
+        if (peek() && peek().type === "+") {
+          pos += 1;
+          return parseUnary();
+        }
+        if (peek() && peek().type === "-") {
+          pos += 1;
+          const value = parseUnary();
+          if (!value) return null;
+          return { op: "neg", value: value };
+        }
+        return parsePower();
+      }
+
+      function parsePower() {
+        const base = parsePrimary();
+        if (!base) return null;
+        if (peek() && peek().type === "^") {
+          pos += 1;
+          const exp = parseUnary();
+          if (!exp) return null;
+          return { op: "^", left: base, right: exp };
+        }
+        return base;
+      }
+
+      function parsePrimary() {
+        const token = peek();
+        if (!token) return null;
+        if (token.type === "num") {
+          pos += 1;
+          return { op: "num", value: token.value };
+        }
+        if (token.type === "name" && token.value === "x") {
+          pos += 1;
+          return { op: "x" };
+        }
+        if (token.type === "name") {
+          pos += 1;
+          if (peek() && peek().type === "(") {
+            pos += 1;
+          } else {
+            return null;
+          }
+          const arg = parseExpr();
+          if (!arg || !peek() || peek().type !== ")") return null;
+          pos += 1;
+          return { op: token.value, value: arg };
+        }
+        if (token.type === "(") {
+          pos += 1;
+          const inner = parseExpr();
+          if (!inner || !peek() || peek().type !== ")") return null;
+          pos += 1;
+          return inner;
+        }
+        return null;
+      }
+
+      const tree = parseExpr();
+      if (!tree || pos !== tokens.length) return null;
+      return tree;
+    }
+
+    function evalExpr(node, x) {
+      if (!node) return NaN;
+      if (node.op === "num") return node.value;
+      if (node.op === "x") return x;
+      if (node.op === "neg") return -evalExpr(node.value, x);
+      if (node.op === "sin") return Math.sin(evalExpr(node.value, x));
+      if (node.op === "cos") return Math.cos(evalExpr(node.value, x));
+      if (node.op === "sqrt") return Math.sqrt(evalExpr(node.value, x));
+      const a = evalExpr(node.left, x);
+      const b = evalExpr(node.right, x);
+      if (node.op === "+") return a + b;
+      if (node.op === "-") return a - b;
+      if (node.op === "*") return a * b;
+      if (node.op === "/") return a / b;
+      if (node.op === "^") return Math.pow(a, b);
+      return NaN;
+    }
+
+    // First return to height 0 after the shot leaves the ground. Same rule as the fire station.
+    function shellFlight(tree) {
+      const step = ARC_INTEGRATION_STEP;
+      let prevX = 0;
+      let prevY = evalExpr(tree, 0);
+      if (!isFinite(prevY)) return null;
+      let peak = prevY;
+      let peakX = 0;
+      let leftGround = prevY > 0.02;
+      const steps = Math.round(ARC_MAX_METERS / step);
+      for (let i = 1; i <= steps; i++) {
+        const x = i * step;
+        const y = evalExpr(tree, x);
+        if (!isFinite(y)) return null;
+        if (y > peak) {
+          peak = y;
+          peakX = x;
+        }
+        if (y > 0.02) leftGround = true;
+        if (leftGround && x > 0 && y <= 0) {
+          const drop = prevY - y;
+          const t = drop === 0 ? 1 : prevY / drop;
+          const mix = t < 0 ? 0 : (t > 1 ? 1 : t);
+          return {
+            impact: true,
+            distance: prevX + (x - prevX) * mix,
+            peak: peak,
+            peakX: peakX
+          };
+        }
+        prevX = x;
+        prevY = y;
+      }
+      return { impact: false, peak: peak, peakX: peakX };
+    }
+
+    function firingCurve(tree) {
+      const flight = shellFlight(tree);
+      if (!flight) return null;
+      const end = flight.impact ? flight.distance : ARC_MAX_METERS;
+      const points = [];
+      const steps = Math.max(1, Math.ceil(end / ARC_SAMPLE_STEP));
+      for (let i = 0; i <= steps; i++) {
+        const x = Math.min(end, i * ARC_SAMPLE_STEP);
+        const y = evalExpr(tree, x);
+        if (!isFinite(y)) return null;
+        points.push({ x: x, y: y });
+        if (x >= end - 1e-6) break;
+      }
+      if (flight.impact && points.length > 0) {
+        points[points.length - 1] = { x: flight.distance, y: 0 };
+      }
+      return {
+        points: points,
+        peakX: flight.peakX,
+        peak: flight.peak,
+        impact: flight.impact ? flight.distance : null
+      };
+    }
+
+    // Stick or velocity when the game has one. Otherwise the middle of the field.
+    function aimOf(player) {
+      const ax = Number(player.aimX) || 0;
+      const ay = Number(player.aimY) || 0;
+      const len = Math.hypot(ax, ay);
+      if (len > 0.001) return { x: ax / len, y: ay / len };
+      const dx = -player.x;
+      const dy = -player.y;
+      const d = Math.hypot(dx, dy);
+      if (d < 0.001) return { x: 1, y: 0 };
+      return { x: dx / d, y: dy / d };
+    }
+
+    // Equation x is distance along the facing. Equation y is height on the vertical axis.
+    function arcWorld(player, aim, distance, height) {
+      return new THREE.Vector3(
+        worldX(player.x + aim.x * distance),
+        height,
+        worldZ(player.y + aim.y * distance)
+      );
+    }
+
+    function clearArc(index) {
+      const current = arcObjects[index];
+      if (!current) return;
+      arcsGroup.remove(current);
+      disposeObject(current);
+      arcObjects[index] = null;
+    }
+
+    function makeGroundX(color, at) {
+      const size = 1.4;
+      const lift = 0.22;
+      const material = new THREE.LineBasicMaterial({ color: color });
+      const first = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(at.x - size, lift, at.z - size),
+        new THREE.Vector3(at.x + size, lift, at.z + size)
+      ]);
+      const second = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(at.x - size, lift, at.z + size),
+        new THREE.Vector3(at.x + size, lift, at.z - size)
+      ]);
+      const group = new THREE.Group();
+      group.add(new THREE.Line(first, material));
+      group.add(new THREE.Line(second, material.clone()));
+      return group;
+    }
+
+    function buildArc(player, color) {
+      const tree = parseExpression(player.equation);
+      if (!tree) return null;
+      const curve = firingCurve(tree);
+      if (!curve || curve.points.length < 2) return null;
+      const aim = aimOf(player);
+      const group = new THREE.Group();
+      const vectors = [];
+      for (let i = 0; i < curve.points.length; i++) {
+        const point = curve.points[i];
+        vectors.push(arcWorld(player, aim, point.x, point.y));
+      }
+      const geometry = new THREE.BufferGeometry().setFromPoints(vectors);
+      group.add(new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: color })));
+      const peak = new THREE.Mesh(
+        new THREE.SphereGeometry(0.7, 12, 8),
+        new THREE.MeshBasicMaterial({ color: color })
+      );
+      peak.position.copy(arcWorld(player, aim, curve.peakX, curve.peak));
+      group.add(peak);
+      if (curve.impact !== null) {
+        const impactAt = arcWorld(player, aim, curve.impact, 0);
+        group.add(makeGroundX(color, impactAt));
+      }
+      return group;
+    }
+
+    function arcKey(player) {
+      return [
+        player.x,
+        player.y,
+        player.aimX || 0,
+        player.aimY || 0,
+        player.equation || ""
+      ].join("|");
+    }
+
+    function syncArcs() {
+      const players = battlefield.players || [];
+      const colors = [COLOR_P1, COLOR_P2];
+      for (let i = 0; i < 2; i++) {
+        const player = players[i];
+        if (!player) {
+          clearArc(i);
+          arcKeys[i] = "";
+          continue;
+        }
+        const key = arcKey(player);
+        if (key === arcKeys[i]) continue;
+        arcKeys[i] = key;
+        clearArc(i);
+        const group = buildArc(player, colors[i] || COLOR_P1);
+        if (!group) continue;
+        arcObjects[i] = group;
+        arcsGroup.add(group);
+      }
+    }
+
+    function playerIndexOf(object) {
+      let current = object;
+      while (current) {
+        if (typeof current.userData.playerIndex === "number") return current.userData.playerIndex;
+        current = current.parent;
+      }
+      return -1;
+    }
+
+    function axisMeters(player) {
+      const halfW = battlefield.width / 2;
+      const halfH = battlefield.height / 2;
+      return {
+        x: player.x + halfW,
+        y: halfH - player.y
+      };
+    }
+
+    function percentText(value) {
+      if (value === undefined || value === null || !isFinite(Number(value))) return "—";
+      return Math.round(Number(value)) + "%";
+    }
+
+    function updateHover() {
+      if (!pointerInside || !battlefield || !battlefield.players) {
+        tip.hidden = true;
+        return;
+      }
+      raycaster.setFromCamera(pointer, camera);
+      const hits = raycaster.intersectObjects(machinesGroup.children, true);
+      let index = -1;
+      for (let i = 0; i < hits.length; i++) {
+        index = playerIndexOf(hits[i].object);
+        if (index >= 0) break;
+      }
+      const player = index >= 0 ? battlefield.players[index] : null;
+      const machine = index >= 0 ? machinesGroup.children[index] : null;
+      if (!player || !machine) {
+        tip.hidden = true;
+        return;
+      }
+      const name = index === 0 ? "P1" : "P2";
+      const spot = axisMeters(player);
+      tip.textContent = name
+        + "\nHP: " + percentText(player.health)
+        + "\nFuel: " + percentText(player.fuel)
+        + "\nPosition: " + spot.x.toFixed(1) + " m, " + spot.y.toFixed(1) + " m";
+      const world = new THREE.Vector3();
+      machine.getWorldPosition(world);
+      world.y += 3;
+      world.project(camera);
+      if (world.z > 1) {
+        tip.hidden = true;
+        return;
+      }
+      const canvas = renderer.domElement;
+      const sx = (world.x * 0.5 + 0.5) * canvas.clientWidth;
+      const sy = (-world.y * 0.5 + 0.5) * canvas.clientHeight;
+      tip.style.left = Math.round(sx + 16) + "px";
+      tip.style.top = Math.round(sy - 10) + "px";
+      tip.hidden = false;
     }
 
     function applyState(next) {
@@ -405,6 +813,7 @@
       if (!fieldReady) buildField();
       syncObstacles();
       syncPlayers();
+      syncArcs();
     }
 
     function loadSavedBattlefield() {
@@ -439,8 +848,21 @@
       if (document.hidden) return;
       controls.update();
       updateLabelScale();
+      updateHover();
       renderer.render(scene, camera);
     }
+
+    renderer.domElement.addEventListener("pointermove", function (event) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      pointerInside = true;
+    });
+
+    renderer.domElement.addEventListener("pointerleave", function () {
+      pointerInside = false;
+      tip.hidden = true;
+    });
 
     resetButton.addEventListener("click", resetView);
     window.addEventListener("resize", resize);

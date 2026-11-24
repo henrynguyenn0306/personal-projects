@@ -496,6 +496,7 @@
       if (player.refueling) setActivity(player, "Refueling");
       else if (speed > MOVE_STATUS_SPEED) setActivity(player, "Moving");
       else if (player.activity === "Moving" || player.activity === "Refueling") setActivity(player, "Idle");
+      publishFireState(player, unit);
       return moved;
     }
 
@@ -3108,15 +3109,90 @@
       return obstacles;
     }
 
+    // The stick, while it is pushed, is the way the machine faces. A coast keeps that
+    // direction from the velocity. Until either one exists, shots aim at the field center.
+    const AIM_STICK_MIN = 0.08;
+    const AIM_SPEED_MIN = 0.15;
+
+    function aimTowardFieldCenter(unit) {
+      const dx = -unit.x;
+      const dy = -unit.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 0.001) {
+        unit.aimX = 1;
+        unit.aimY = 0;
+      } else {
+        unit.aimX = dx / len;
+        unit.aimY = dy / len;
+      }
+    }
+
+    function setFacing(unit, ax, ay) {
+      const len = Math.hypot(ax, ay);
+      if (len < 0.0001) return;
+      const nx = ax / len;
+      const ny = ay / len;
+      if (unit.aimSet && Math.hypot(nx - unit.aimX, ny - unit.aimY) < 0.02) return;
+      unit.aimX = nx;
+      unit.aimY = ny;
+      unit.aimSet = true;
+      battlefieldDirty = true;
+    }
+
+    function updateFacing(player, unit) {
+      if (player.gripping && Math.hypot(player.tiltX, player.tiltY) > AIM_STICK_MIN) {
+        setFacing(unit, player.tiltX, player.tiltY);
+        return;
+      }
+      if (Math.hypot(unit.vx, unit.vy) > AIM_SPEED_MIN) setFacing(unit, unit.vx, unit.vy);
+    }
+
+    // The viewer reads the fire-station equation and the facing off each machine.
+    function publishFireState(player, unit) {
+      if (unit.equation !== player.equation) {
+        unit.equation = player.equation;
+        battlefieldDirty = true;
+      }
+      updateFacing(player, unit);
+    }
+
+    // Axis origin is the top-left corner. Axis x runs across the width, axis y down the length.
+    // Game x is centered. Game y is centered and points up, opposite the axis y direction.
+    function gameFromAxis(axisX, axisY) {
+      return {
+        x: axisX - FIELD_X_MAX,
+        y: FIELD_Y_MAX - axisY
+      };
+    }
+
     // Hidden map. It is not drawn in the rooms. The viewer tab reads this object.
     function makeBattlefield() {
-      const players = [
-        { x: -60, y: 0, health: MAX_HEALTH, vx: 0, vy: 0, fuel: MAX_FUEL },
-        { x: 60, y: 0, health: MAX_HEALTH, vx: 0, vy: 0, fuel: MAX_FUEL }
+      const width = FIELD_X_MAX * 2;
+      const height = FIELD_Y_MAX * 2;
+      const spots = [
+        gameFromAxis(width / 4, height / 4),
+        gameFromAxis(width - width / 4, height - height / 4)
       ];
+      const players = [];
+      for (let i = 0; i < spots.length; i++) {
+        const unit = {
+          x: spots[i].x,
+          y: spots[i].y,
+          health: MAX_HEALTH,
+          vx: 0,
+          vy: 0,
+          fuel: MAX_FUEL,
+          equation: FIRE_DEFAULT_EQUATION,
+          aimX: 0,
+          aimY: 0,
+          aimSet: false
+        };
+        aimTowardFieldCenter(unit);
+        players.push(unit);
+      }
       return {
-        width: FIELD_X_MAX * 2,
-        height: FIELD_Y_MAX * 2,
+        width: width,
+        height: height,
         players: players,
         obstacles: makeObstacles(players)
       };
