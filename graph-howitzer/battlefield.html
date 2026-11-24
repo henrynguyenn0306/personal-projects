@@ -61,6 +61,7 @@
   <div id="message">Open the game first</div>
   <div id="tip" hidden></div>
 
+  <script src="fire-curve.js"></script>
   <script type="module">
     import * as THREE from "three";
     import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -383,8 +384,6 @@
 
     // Same safe parser as the fire station. No eval or Function is used.
     const ARC_MAX_METERS = 100;
-    const ARC_SAMPLE_STEP = 0.5;
-    const ARC_INTEGRATION_STEP = 0.05;
 
     function tokenizeEquation(input) {
       const tokens = [];
@@ -574,64 +573,15 @@
       return NaN;
     }
 
-    // First return to height 0 after the shot leaves the ground. Same rule as the fire station.
-    function shellFlight(tree) {
-      const step = ARC_INTEGRATION_STEP;
-      let prevX = 0;
-      let prevY = evalExpr(tree, 0);
-      if (!isFinite(prevY)) return null;
-      let peak = prevY;
-      let peakX = 0;
-      let leftGround = prevY > 0.02;
-      const steps = Math.round(ARC_MAX_METERS / step);
-      for (let i = 1; i <= steps; i++) {
-        const x = i * step;
-        const y = evalExpr(tree, x);
-        if (!isFinite(y)) return null;
-        if (y > peak) {
-          peak = y;
-          peakX = x;
-        }
-        if (y > 0.02) leftGround = true;
-        if (leftGround && x > 0 && y <= 0) {
-          const drop = prevY - y;
-          const t = drop === 0 ? 1 : prevY / drop;
-          const mix = t < 0 ? 0 : (t > 1 ? 1 : t);
-          return {
-            impact: true,
-            distance: prevX + (x - prevX) * mix,
-            peak: peak,
-            peakX: peakX
-          };
-        }
-        prevX = x;
-        prevY = y;
-      }
-      return { impact: false, peak: peak, peakX: peakX };
-    }
-
+    // Same trace as the fire station: bisected impact, samples every 0.1 m.
     function firingCurve(tree) {
-      const flight = shellFlight(tree);
-      if (!flight) return null;
-      const end = flight.impact ? flight.distance : ARC_MAX_METERS;
-      const points = [];
-      const steps = Math.max(1, Math.ceil(end / ARC_SAMPLE_STEP));
-      for (let i = 0; i <= steps; i++) {
-        const x = Math.min(end, i * ARC_SAMPLE_STEP);
-        const y = evalExpr(tree, x);
-        if (!isFinite(y)) return null;
-        points.push({ x: x, y: y });
-        if (x >= end - 1e-6) break;
-      }
-      if (flight.impact && points.length > 0) {
-        points[points.length - 1] = { x: flight.distance, y: 0 };
-      }
-      return {
-        points: points,
-        peakX: flight.peakX,
-        peak: flight.peak,
-        impact: flight.impact ? flight.distance : null
-      };
+      return GraphHowitzerFire.traceShell(function (x) {
+        return evalExpr(tree, x);
+      }, {
+        maxDistance: ARC_MAX_METERS,
+        sampleStep: GraphHowitzerFire.SAMPLE_STEP,
+        shellSpeed: 20
+      });
     }
 
     // Stick or velocity when the game has one. Otherwise the middle of the field.
@@ -695,15 +645,21 @@
         vectors.push(arcWorld(player, aim, point.x, point.y));
       }
       const geometry = new THREE.BufferGeometry().setFromPoints(vectors);
-      group.add(new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: color })));
+      // Bias the line toward the camera so the tip is not hidden in the ground plane.
+      group.add(new THREE.Line(geometry, new THREE.LineBasicMaterial({
+        color: color,
+        polygonOffset: true,
+        polygonOffsetFactor: -4,
+        polygonOffsetUnits: -4
+      })));
       const peak = new THREE.Mesh(
         new THREE.SphereGeometry(0.7, 12, 8),
         new THREE.MeshBasicMaterial({ color: color })
       );
       peak.position.copy(arcWorld(player, aim, curve.peakX, curve.peak));
       group.add(peak);
-      if (curve.impact !== null) {
-        const impactAt = arcWorld(player, aim, curve.impact, 0);
+      if (curve.impact && curve.distance !== null) {
+        const impactAt = arcWorld(player, aim, curve.distance, 0);
         group.add(makeGroundX(color, impactAt));
       }
       return group;

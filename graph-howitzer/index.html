@@ -12,6 +12,7 @@
 <body>
   <canvas id="room"></canvas>
 
+  <script src="fire-curve.js"></script>
   <script>
     // Sizes and colors live here so they are easy to change later
     const WALL_WIDTH = 20;
@@ -173,11 +174,9 @@
     const FIRE_STATION_WIDTH = 250;
     const FIRE_STATION_HEIGHT = 230;
     const FIRE_GRAPH_X_MAX = 100; // meters along the firing direction
-    const FIRE_SAMPLE_STEP = 0.5;
     const FIRE_EQUATION_MAX = 48;
     const FIRE_DEFAULT_EQUATION = "-0.05x^2 + 2x";
     const SHELL_SPEED = 20; // m/s along the path, not along the ground
-    const SHELL_INTEGRATION_STEP = 0.05; // horizontal step used to measure the arc
     const FIRE_KEY_COLS = 5;
     const FIRE_KEYS = [
       "7", "8", "9", "+", "sin",
@@ -1722,47 +1721,19 @@
       if (player.equationParsedFor === player.equation) return;
       player.equationParsedFor = player.equation;
       player.equationTree = parseExpression(player.equation);
-      player.flight = player.equationTree ? shellFlight(player.equationTree) : null;
+      player.flight = player.equationTree ? traceEquation(player.equationTree) : null;
     }
 
-    // First return to the ground after takeoff. Time is the arc length divided by shell speed.
-    function shellFlight(tree) {
-      const step = SHELL_INTEGRATION_STEP;
-      let prevX = 0;
-      let prevY = evalExpr(tree, 0);
-      if (!isFinite(prevY)) return null;
-      let arc = 0;
-      let peak = prevY;
-      let peakX = 0;
-      let leftGround = prevY > 0.02;
-      const steps = Math.round(FIRE_GRAPH_X_MAX / step);
-      for (let i = 1; i <= steps; i++) {
-        const x = i * step;
-        const y = evalExpr(tree, x);
-        if (!isFinite(y)) return null;
-        const seg = Math.hypot(x - prevX, y - prevY);
-        if (y > peak) {
-          peak = y;
-          peakX = x;
-        }
-        if (y > 0.02) leftGround = true;
-        if (leftGround && x > 0 && y <= 0) {
-          const drop = prevY - y;
-          const t = drop === 0 ? 1 : prevY / drop;
-          const mix = t < 0 ? 0 : (t > 1 ? 1 : t);
-          return {
-            impact: true,
-            distance: prevX + (x - prevX) * mix,
-            peak: peak,
-            peakX: peakX,
-            time: (arc + seg * mix) / SHELL_SPEED
-          };
-        }
-        arc += seg;
-        prevX = x;
-        prevY = y;
-      }
-      return { impact: false, peak: peak, peakX: peakX };
+    // Shared with the battlefield viewer. The impact is bisected, and the
+    // polyline ends on that point at height 0.
+    function traceEquation(tree) {
+      return GraphHowitzerFire.traceShell(function (x) {
+        return evalExpr(tree, x);
+      }, {
+        maxDistance: FIRE_GRAPH_X_MAX,
+        sampleStep: GraphHowitzerFire.SAMPLE_STEP,
+        shellSpeed: SHELL_SPEED
+      });
     }
 
     function impactLines(player) {
@@ -1774,22 +1745,6 @@
         "Peak height: " + flight.peak.toFixed(1) + " m",
         "Flight time: " + flight.time.toFixed(1) + " s"
       ];
-    }
-
-    // Samples from x = 0 until the shell comes back to the ground, or the axis ends.
-    function shellPoints(tree) {
-      const points = [];
-      let leftGround = false;
-      const steps = Math.round(FIRE_GRAPH_X_MAX / FIRE_SAMPLE_STEP);
-      for (let i = 0; i <= steps; i++) {
-        const x = i * FIRE_SAMPLE_STEP;
-        const y = evalExpr(tree, x);
-        if (!isFinite(y)) break;
-        if (y > 0.02) leftGround = true;
-        points.push({ x: x, y: y });
-        if (leftGround && y <= 0) break;
-      }
-      return points;
     }
 
     function niceTickStep(span) {
@@ -1820,7 +1775,7 @@
       const plotY = screen.y + padT;
       const plotW = Math.max(8, screen.w - padL - padR);
       const plotH = Math.max(8, screen.h - padT - padB);
-      const points = tree ? shellPoints(tree) : [];
+      const points = flight && flight.points ? flight.points : [];
       let yMin = 0;
       let yMax = 10;
       for (let i = 0; i < points.length; i++) {
