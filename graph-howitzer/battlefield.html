@@ -653,7 +653,7 @@
       }, { shellSpeed: 20 });
     }
 
-    // Stick or velocity when the game has one. Otherwise the middle of the field.
+    // The fire-station turret dial writes this direction. Otherwise aim at the field center.
     function aimOf(player) {
       const ax = Number(player.aimX) || 0;
       const ay = Number(player.aimY) || 0;

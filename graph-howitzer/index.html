@@ -133,8 +133,8 @@
     const RED_PING_BLINK_SECONDS = 0.4;
     const COLOR_RED_PING_OFF = "#3a1518";
     const COLOR_RED_PING_ON = "#ff2a2a";
-    // Big joystick on the left side of the room. The hand grips it in place.
-    const JOYSTICK_SIZE_RATIO = 1.8; // plate side is about 1.8 times the radar side
+    // The hand grips the joystick in place. Its plate is sized with the fire station
+    // so the lower row keeps the monitor row's margins.
     const JOYSTICK_WELL_RATIO = 0.56; // dark circle in the middle of the plate
     const JOYSTICK_REST_LEAN = 0.7; // the idle picture points up; a gripped stick rests at the center
     const JOYSTICK_STICK_RATIO = 0.28; // how far the knob can lean, compared with the plate
@@ -166,8 +166,6 @@
     const LOW_FUEL_TEXT = "> Warning: Fuel low (<20%).";
     const OUT_OF_FUEL_TEXT = "> Alert: Fuel depleted. Propulsion offline.";
     // Fire control is the equation station. No shell is launched from it yet.
-    const FIRE_STATION_WIDTH = 250;
-    const FIRE_STATION_HEIGHT = 230;
     const FIRE_GRAPH_X_MAX = 100; // meters along the firing direction
     const FIRE_EQUATION_MAX = 64;
     const FIRE_DEFAULT_EQUATION = "-0.05x^2 + 2x";
@@ -238,8 +236,8 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0 };
-    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0 };
+    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, turretAngle: 0, dialDrag: false, dialHover: "" };
+    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, turretAngle: 0, dialDrag: false, dialHover: "" };
 
     // The wall sits in the middle. Each player owns one side of it.
     function getRooms() {
@@ -319,7 +317,10 @@
     });
 
     window.addEventListener("keyup", function (event) {
-      keys[keyName(event)] = false;
+      const name = keyName(event);
+      keys[name] = false;
+      if (name === INTERACT_KEY_P1) player1.dialDrag = false;
+      if (name === INTERACT_KEY_P2) player2.dialDrag = false;
     });
 
     // Turn held keys into a direction. Diagonal moves stay at the same speed.
@@ -558,12 +559,14 @@
       player1.gripping = false;
       player1.refueling = false;
       player1.fireOpen = false;
+      player1.dialDrag = false;
       setRefuelLine(player1, false);
       player2.panelOpen = false;
       player2.panelKind = "";
       player2.gripping = false;
       player2.refueling = false;
       player2.fireOpen = false;
+      player2.dialDrag = false;
       setRefuelLine(player2, false);
     }
 
@@ -735,7 +738,16 @@
       player.pointX += dir.x * HAND_SPEED * dt;
       player.pointY += dir.y * HAND_SPEED * dt;
       clampPointingHand(player, room);
-      if (player.panelKind === "fire") player.fireIndex = keyUnderPoint(player, room);
+      if (player.panelKind === "fire") {
+        const hit = dialUnderPoint(player, room);
+        player.dialHover = hit;
+        player.fireIndex = hit ? -1 : keyUnderPoint(player, room);
+        if (player.dialDrag) {
+          const key = player === player1 ? INTERACT_KEY_P1 : INTERACT_KEY_P2;
+          if (keys[key]) applyDialDrag(player, room);
+          else player.dialDrag = false;
+        }
+      }
     }
 
     // Pointing pose while a zoom window is open. A tap shrinks it around the fingertip.
@@ -909,47 +921,37 @@
       };
     }
 
-    // Joystick group and fire control sit just under the monitor row.
-    // The gap matches the one between the monitor and the radar.
-    // Three equal gaps still run across the half: before the group, between the plates, and after fire control.
+    // Joystick group (stick plus fuel column) and fire control use the monitor row's gaps:
+    // the same inset from each side, the same gap between the two, and that same gap again
+    // under the monitor row. Both plates share one height so the row stays even.
     function lowerControls(room, row) {
       const roomWidth = room.right - room.left;
       const rowBottom = row.monitor.y + Math.max(row.monitor.height, row.radar.height);
-      const rowGap = row.radar.x - (row.monitor.x + row.monitor.width);
+      const rowGap = Math.max(4, row.radar.x - (row.monitor.x + row.monitor.width));
       const top = rowBottom + rowGap;
-      const roomBelow = Math.max(1, canvas.height - top);
-
-      let joySize = row.radar.width * JOYSTICK_SIZE_RATIO;
-      let fuelW = FUEL_GAUGE_WIDTH;
-      let fireW = FIRE_STATION_WIDTH;
-      let fireH = FIRE_STATION_HEIGHT;
-      if (joySize > roomBelow) joySize = roomBelow;
-      if (fireH > roomBelow) {
-        fireW *= roomBelow / fireH;
-        fireH = roomBelow;
+      const inner = Math.max(90, roomWidth - rowGap * 3);
+      const maxH = Math.max(72, canvas.height - top - rowGap);
+      const fuelW = Math.max(46, Math.min(68, inner * 0.105));
+      let joy = Math.min(maxH, (inner - fuelW) * 0.46);
+      if (joy < 72) joy = Math.min(maxH, 72);
+      let fireW = inner - joy - fuelW;
+      if (fireW < 120) {
+        joy = Math.max(64, Math.min(maxH, inner - fuelW - 120));
+        fireW = inner - joy - fuelW;
       }
-      const natural = joySize + fuelW + fireW;
-      if (natural > roomWidth && natural > 0) {
-        const fit = roomWidth / natural;
-        joySize *= fit;
-        fuelW *= fit;
-        fireW *= fit;
-        fireH *= fit;
-      }
-      const gap = (roomWidth - (joySize + fuelW + fireW)) / 3;
       return {
         joystick: {
-          x: room.left + gap,
+          x: room.left + rowGap,
           y: top,
-          width: joySize,
-          height: joySize
+          width: joy,
+          height: joy
         },
         fuelWidth: fuelW,
         fire: {
-          x: room.left + gap * 2 + joySize + fuelW,
+          x: room.left + rowGap + joy + fuelW + rowGap,
           y: top,
           width: fireW,
-          height: fireH
+          height: joy
         }
       };
     }
@@ -1517,6 +1519,8 @@
       player.panelKind = "";
       player.fireOpen = false;
       player.fireIndex = -1;
+      player.dialDrag = false;
+      player.dialHover = "";
     }
 
     // Keypad cell under the fingertip, or -1 when the tip is somewhere else.
@@ -1900,19 +1904,24 @@
       }, { shellSpeed: SHELL_SPEED });
     }
 
+    function directionLine(player) {
+      return "Direction: " + turretLabel(player);
+    }
+
     function impactLines(player) {
+      const direction = directionLine(player);
       if (!player.equationTree) {
         const reason = player.equationError ? player.equationError : "syntax error";
-        return ["Syntax error: " + reason, "Cannot fire: syntax error"];
+        return ["Syntax error: " + reason, "Cannot fire: syntax error", direction];
       }
       if (!player.flight || !player.flight.points || !player.flight.points.length) {
-        return ["Cannot fire: no curve"];
+        return ["Cannot fire: no curve", direction];
       }
       const flight = player.flight;
       const peak = "Peak height: " + flight.peak.toFixed(1) + " m";
       const time = "Flight time: " + flight.time.toFixed(1) + " s";
-      if (!flight.impact) return ["Impact: none in range", peak, time];
-      return ["Impact distance: " + flight.distance.toFixed(1) + " m", peak, time];
+      if (!flight.impact) return ["Impact: none in range", peak, time, direction];
+      return ["Impact distance: " + flight.distance.toFixed(1) + " m", peak, time, direction];
     }
 
     function stationFireNote(player) {
@@ -2243,6 +2252,177 @@
       ctx.restore();
     }
 
+    // 0° is battlefield +x. The angle grows counter-clockwise when seen from above.
+    function turretDegrees(player) {
+      const raw = Number(player.turretAngle) || 0;
+      return ((raw % 360) + 360) % 360;
+    }
+
+    function turretLabel(player) {
+      return (Math.round(turretDegrees(player)) % 360) + "°";
+    }
+
+    function angleFromPointer(cx, cy, x, y) {
+      let deg = Math.atan2(-(y - cy), x - cx) * 180 / Math.PI;
+      if (deg < 0) deg += 360;
+      return deg;
+    }
+
+    function setTurretAngle(player, degrees) {
+      const next = ((degrees % 360) + 360) % 360;
+      player.turretAngle = next;
+      const unit = battlefield.players[player === player1 ? 0 : 1];
+      const rad = next * Math.PI / 180;
+      const ax = Math.cos(rad);
+      const ay = Math.sin(rad);
+      if (Math.hypot(ax - unit.aimX, ay - unit.aimY) > 0.0004) {
+        unit.aimX = ax;
+        unit.aimY = ay;
+        unit.aimSet = true;
+        battlefieldDirty = true;
+      }
+    }
+
+    function nudgeTurret(player, delta) {
+      setTurretAngle(player, turretDegrees(player) + delta);
+    }
+
+    // Circle, degree line, and optional ±1° buttons. The widget is centered in the box.
+    function turretDialParts(box, withButtons) {
+      const buttonH = withButtons ? Math.max(24, Math.min(32, box.height * 0.18)) : Math.max(13, Math.min(18, box.height * 0.2));
+      const gap = 4;
+      const r = Math.max(8, Math.min(box.width, box.height - buttonH - gap) / 2 - 2);
+      const widgetH = r * 2 + gap + buttonH;
+      const top = box.y + Math.max(0, (box.height - widgetH) / 2);
+      const cx = box.x + box.width / 2;
+      const cy = top + r + 1;
+      const rowY = cy + r + gap;
+      const rowH = buttonH;
+      let ccw = null;
+      let cw = null;
+      let label = { x: box.x, y: rowY, width: box.width, height: rowH };
+      if (withButtons) {
+        const bw = Math.min(34, Math.max(22, box.width * 0.24));
+        ccw = { x: box.x, y: rowY, width: bw, height: rowH };
+        cw = { x: box.x + box.width - bw, y: rowY, width: bw, height: rowH };
+        label = { x: box.x + bw, y: rowY, width: Math.max(8, box.width - bw * 2), height: rowH };
+      }
+      return { box: box, cx: cx, cy: cy, r: r, ccw: ccw, cw: cw, label: label };
+    }
+
+    function drawTurretDial(box, player, withButtons) {
+      const parts = turretDialParts(box, withButtons);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(parts.cx, parts.cy, parts.r, 0, Math.PI * 2);
+      ctx.fillStyle = "#06140c";
+      ctx.fill();
+      ctx.lineWidth = Math.max(2, parts.r * 0.06);
+      ctx.strokeStyle = player.dialDrag ? COLOR_MONITOR_TEXT : "#2f6a45";
+      ctx.stroke();
+
+      ctx.strokeStyle = "rgba(57, 255, 106, 0.45)";
+      ctx.lineWidth = 1;
+      for (let step = 0; step < 8; step++) {
+        const rad = step * Math.PI / 4;
+        const outer = parts.r * (step % 2 === 0 ? 0.92 : 0.84);
+        const inner = parts.r * 0.72;
+        ctx.beginPath();
+        ctx.moveTo(parts.cx + Math.cos(rad) * inner, parts.cy - Math.sin(rad) * inner);
+        ctx.lineTo(parts.cx + Math.cos(rad) * outer, parts.cy - Math.sin(rad) * outer);
+        ctx.stroke();
+      }
+
+      const deg = turretDegrees(player);
+      const rad = deg * Math.PI / 180;
+      const nx = Math.cos(rad);
+      const ny = -Math.sin(rad);
+      ctx.strokeStyle = player === player1 ? COLOR_P1 : COLOR_P2;
+      ctx.lineWidth = Math.max(2, parts.r * 0.09);
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(parts.cx - nx * parts.r * 0.16, parts.cy - ny * parts.r * 0.16);
+      ctx.lineTo(parts.cx + nx * parts.r * 0.74, parts.cy + ny * parts.r * 0.74);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(parts.cx, parts.cy, Math.max(2.5, parts.r * 0.09), 0, Math.PI * 2);
+      ctx.fillStyle = player === player1 ? COLOR_P1 : COLOR_P2;
+      ctx.fill();
+
+      ctx.fillStyle = COLOR_MONITOR_TEXT;
+      ctx.font = "bold " + Math.max(10, Math.min(16, Math.floor(parts.label.height * 0.7))) + "px monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(turretLabel(player), parts.label.x + parts.label.width / 2, parts.label.y + parts.label.height / 2);
+
+      if (parts.ccw && parts.cw) {
+        drawDialNudge(parts.ccw, "◀", player.dialHover === "ccw");
+        drawDialNudge(parts.cw, "▶", player.dialHover === "cw");
+      }
+      ctx.restore();
+      return parts;
+    }
+
+    function drawDialNudge(rect, label, hot) {
+      ctx.fillStyle = hot ? "#1c3a28" : "#101014";
+      ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+      if (hot) {
+        ctx.strokeStyle = COLOR_MONITOR_TEXT;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.width - 1, rect.height - 1);
+      }
+      ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
+      ctx.font = "bold " + Math.max(11, Math.min(15, Math.floor(rect.height * 0.55))) + "px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, rect.x + rect.width / 2, rect.y + rect.height / 2);
+    }
+
+    function dialUnderPoint(player, room) {
+      if (player.panelKind !== "fire") return "";
+      const dial = zoomContent(room).dial;
+      if (!dial) return "";
+      const parts = turretDialParts(dial, true);
+      const tipX = player.pointX;
+      const tipY = player.pointY;
+      if (parts.ccw && pointInRect(tipX, tipY, parts.ccw)) return "ccw";
+      if (parts.cw && pointInRect(tipX, tipY, parts.cw)) return "cw";
+      if (Math.hypot(tipX - parts.cx, tipY - parts.cy) <= parts.r + 4) return "face";
+      return "";
+    }
+
+    function applyDialDrag(player, room) {
+      const dial = zoomContent(room).dial;
+      if (!dial) return;
+      const parts = turretDialParts(dial, true);
+      setTurretAngle(player, angleFromPointer(parts.cx, parts.cy, player.pointX, player.pointY));
+    }
+
+    function stationFireLayout(rect) {
+      const innerX = rect.x + 10;
+      const innerY = rect.y + 10;
+      const innerW = Math.max(20, rect.width - 20);
+      const innerBottom = rect.y + rect.height - 26;
+      const innerH = Math.max(20, innerBottom - innerY);
+      const eqH = Math.max(22, Math.min(32, innerH * 0.18));
+      const noteH = 14;
+      const rowY = innerY + eqH + noteH + 6;
+      const rowH = Math.max(16, innerBottom - rowY);
+      const gap = 6;
+      let dialW = Math.min(rowH, Math.max(52, innerW * 0.34));
+      if (innerW - dialW - gap < 64) dialW = Math.max(40, innerW - gap - 64);
+      return {
+        innerX: innerX,
+        innerY: innerY,
+        innerW: innerW,
+        innerBottom: innerBottom,
+        eqH: eqH,
+        noteH: noteH,
+        graph: { x: innerX, y: rowY, w: Math.max(16, innerW - dialW - gap), h: rowH },
+        dial: { x: innerX + innerW - dialW, y: rowY, width: dialW, height: rowH }
+      };
+    }
+
     function drawFireStation(room, player) {
       const rect = getFireRect(room);
       const near = stationNearHand(player, room) === "fire";
@@ -2269,34 +2449,25 @@
       ctx.arc(rect.x + rect.width - inset - 8, rect.y + rect.height - 16, 3.5, 0, Math.PI * 2);
       ctx.fill();
 
-      const innerX = rect.x + 12;
-      const innerY = rect.y + 12;
-      const innerW = rect.width - 24;
-      const eqH = Math.max(28, Math.min(36, rect.height * 0.16));
-      const noteH = 16;
-      const graphY = innerY + eqH + noteH + 8;
-      const graphH = rect.y + rect.height - 30 - graphY;
-      // Dark glass until H.O.W.L.E.R has finished booting. No equation and no graph yet.
+      const body = stationFireLayout(rect);
+      // Dark glass until H.O.W.L.E.R has finished booting. No equation, graph, or dial yet.
       if (!machineStarted) {
         ctx.fillStyle = "#000000";
-        ctx.fillRect(innerX, innerY, innerW, Math.max(8, rect.y + rect.height - 28 - innerY));
+        ctx.fillRect(body.innerX, body.innerY, body.innerW, Math.max(8, body.innerBottom - body.innerY));
         ctx.restore();
         return;
       }
-      drawEquationField({ x: innerX, y: innerY, width: innerW, height: eqH }, player, "12px monospace", false);
+      drawEquationField({ x: body.innerX, y: body.innerY, width: body.innerW, height: body.eqH }, player, "12px monospace", false);
       ctx.font = "10px monospace";
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
       ctx.fillStyle = player.canFire ? COLOR_MONITOR_TEXT : COLOR_MONITOR_WARNING;
-      ctx.fillText(stationFireNote(player), innerX + 4, innerY + eqH + noteH / 2 + 2);
+      ctx.fillText(stationFireNote(player), body.innerX + 4, body.innerY + body.eqH + body.noteH / 2 + 2);
 
-      if (graphH > 20 && innerW > 20) {
-        drawShellGraph(
-          { x: innerX, y: graphY, w: innerW, h: graphH },
-          player.equationTree,
-          player.flight
-        );
+      if (body.graph.h > 20 && body.graph.w > 20) {
+        drawShellGraph(body.graph, player.equationTree, player.flight);
       }
+      if (body.dial.width > 24 && body.dial.height > 24) drawTurretDial(body.dial, player, false);
       ctx.restore();
       if (near && machineStarted) drawInteractOutline(rect);
     }
@@ -2383,31 +2554,30 @@
       ctx.restore();
     }
 
-    // Left side is the flat shell graph. Right side is the keypad. Same frame as the monitor zoom.
+    // Graph and turret dial share the left side. Keypad fills the right side.
     function drawFireZoom(player, view) {
       syncEquation(player);
-      const screenX = view.screenX;
-      const screenY = view.screenY;
-      const screenH = view.screenH;
-      const eq = view.equation;
-      const infoH = 78;
-      drawEquationField(eq, player, "16px monospace", true);
-
-      const graphY = screenY + eq.height + 8;
-      const graphH = screenH - eq.height - infoH - 16;
-      if (graphH > 24) {
-        drawShellGraph({ x: screenX, y: graphY, w: eq.width, h: graphH }, player.equationTree, player.flight);
+      drawEquationField(view.equation, player, "16px monospace", true);
+      if (view.graph.h > 24 && view.graph.w > 24) {
+        drawShellGraph(view.graph, player.equationTree, player.flight);
       }
+      if (view.dial.width > 24 && view.dial.height > 24) drawTurretDial(view.dial, player, true);
 
       const lines = impactLines(player);
-      const infoY = screenY + screenH - infoH;
-      ctx.font = "15px monospace";
+      const info = view.readouts;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(info.x, info.y, info.width, info.height);
+      ctx.clip();
+      ctx.font = "14px monospace";
       ctx.textAlign = "left";
       ctx.textBaseline = "top";
       ctx.fillStyle = player.canFire ? COLOR_MONITOR_TEXT : COLOR_MONITOR_WARNING;
+      const lineH = info.height / Math.max(lines.length, 1);
       for (let i = 0; i < lines.length; i++) {
-        ctx.fillText(lines[i], screenX + 4, infoY + i * 24);
+        ctx.fillText(lines[i], info.x, info.y + i * lineH + 1);
       }
+      ctx.restore();
       drawFireKeys(view.keypad, player);
     }
 
@@ -3024,10 +3194,24 @@
         player.pointPressIndex = -1;
         return;
       }
+      const dialHit = dialUnderPoint(player, room);
+      if (dialHit === "ccw" || dialHit === "cw") {
+        player.pointPressIndex = -1;
+        player.dialDrag = false;
+        nudgeTurret(player, dialHit === "ccw" ? -1 : 1);
+        return;
+      }
+      if (dialHit === "face") {
+        player.pointPressIndex = -1;
+        player.dialDrag = true;
+        applyDialDrag(player, room);
+        return;
+      }
       const keyIndex = keyUnderPoint(player, room);
       if (keyIndex >= 0) {
         player.pointPressIndex = keyIndex;
         player.fireIndex = keyIndex;
+        player.dialDrag = false;
         pressFireKey(player);
         return;
       }
@@ -3045,9 +3229,14 @@
       const screenW = panel.width - bezel * 2;
       const screenH = panel.height - bezel * 2 - 8;
       const gap = 8;
-      const pad = firePadMetrics(Math.floor(screenW * 0.46), screenH);
+      const pad = firePadMetrics(Math.floor(screenW * 0.42), screenH);
       const leftW = Math.max(48, screenW - gap - pad.width);
-      const eqH = 34;
+      const eqH = 32;
+      const infoH = 92;
+      const rowY = screenY + eqH + gap;
+      const rowH = Math.max(40, screenH - eqH - gap - gap - infoH);
+      const dialW = Math.max(96, Math.min(148, leftW * 0.46, rowH));
+      const graphW = Math.max(48, leftW - gap - dialW);
       return {
         panel: panel,
         screenX: screenX,
@@ -3055,6 +3244,9 @@
         screenW: screenW,
         screenH: screenH,
         equation: { x: screenX, y: screenY, width: leftW, height: eqH },
+        graph: { x: screenX, y: rowY, w: graphW, h: rowH },
+        dial: { x: screenX + graphW + gap, y: rowY, width: dialW, height: rowH },
+        readouts: { x: screenX, y: screenY + screenH - infoH, width: leftW, height: infoH },
         keypad: {
           x: screenX + leftW + gap,
           y: screenY,
@@ -3431,45 +3623,21 @@
       return obstacles;
     }
 
-    // The stick, while it is pushed, is the way the machine faces. A coast keeps that
-    // direction from the velocity. Until either one exists, shots aim at the field center.
-    const AIM_STICK_MIN = 0.08;
-    const AIM_SPEED_MIN = 0.15;
-
-    function aimTowardFieldCenter(unit) {
-      const dx = -unit.x;
-      const dy = -unit.y;
-      const len = Math.hypot(dx, dy);
-      if (len < 0.001) {
-        unit.aimX = 1;
-        unit.aimY = 0;
-      } else {
-        unit.aimX = dx / len;
-        unit.aimY = dy / len;
-      }
+    // Degrees from battlefield +x, counter-clockwise from above, toward the field center.
+    function angleTowardCenter(x, y) {
+      let deg = Math.atan2(-y, -x) * 180 / Math.PI;
+      if (!isFinite(deg)) deg = 0;
+      if (deg < 0) deg += 360;
+      return deg;
     }
 
-    function setFacing(unit, ax, ay) {
-      const len = Math.hypot(ax, ay);
-      if (len < 0.0001) return;
-      const nx = ax / len;
-      const ny = ay / len;
-      if (unit.aimSet && Math.hypot(nx - unit.aimX, ny - unit.aimY) < 0.02) return;
-      unit.aimX = nx;
-      unit.aimY = ny;
-      unit.aimSet = true;
-      battlefieldDirty = true;
+    function aimFromDegrees(degrees) {
+      const rad = (((degrees % 360) + 360) % 360) * Math.PI / 180;
+      return { x: Math.cos(rad), y: Math.sin(rad) };
     }
 
-    function updateFacing(player, unit) {
-      if (player.gripping && Math.hypot(player.tiltX, player.tiltY) > AIM_STICK_MIN) {
-        setFacing(unit, player.tiltX, player.tiltY);
-        return;
-      }
-      if (Math.hypot(unit.vx, unit.vy) > AIM_SPEED_MIN) setFacing(unit, unit.vx, unit.vy);
-    }
-
-    // The viewer reads the fire-station equation and the facing off each machine.
+    // The viewer reads the fire-station equation and the turret direction off each machine.
+    // Driving the joystick does not move the turret.
     function publishFireState(player, unit) {
       syncEquation(player);
       if (unit.equation !== player.equation) {
@@ -3480,7 +3648,13 @@
         unit.canFire = player.canFire;
         battlefieldDirty = true;
       }
-      updateFacing(player, unit);
+      const aim = aimFromDegrees(turretDegrees(player));
+      if (Math.hypot(aim.x - unit.aimX, aim.y - unit.aimY) > 0.0004) {
+        unit.aimX = aim.x;
+        unit.aimY = aim.y;
+        unit.aimSet = true;
+        battlefieldDirty = true;
+      }
     }
 
     // Axis origin is the top-left corner. Axis x runs across the width, axis y down the length.
@@ -3500,8 +3674,12 @@
         gameFromAxis(width / 4, height / 4),
         gameFromAxis(width - width / 4, height - height / 4)
       ];
+      const owners = [player1, player2];
       const players = [];
       for (let i = 0; i < spots.length; i++) {
+        const angle = angleTowardCenter(spots[i].x, spots[i].y);
+        const aim = aimFromDegrees(angle);
+        if (owners[i]) owners[i].turretAngle = angle;
         const unit = {
           x: spots[i].x,
           y: spots[i].y,
@@ -3511,11 +3689,10 @@
           fuel: MAX_FUEL,
           equation: FIRE_DEFAULT_EQUATION,
           canFire: true,
-          aimX: 0,
-          aimY: 0,
-          aimSet: false
+          aimX: aim.x,
+          aimY: aim.y,
+          aimSet: true
         };
-        aimTowardFieldCenter(unit);
         players.push(unit);
       }
       return {
