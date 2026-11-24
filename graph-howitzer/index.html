@@ -95,13 +95,15 @@
       Damaged: "#ff4040"
     };
     // What the machine is doing. Idle means it is sitting still.
-    const ACTIVITY_NAMES = ["Idle", "Moving", "Redirecting", "Attacking", "Refueling"];
+    const ACTIVITY_NAMES = ["Idle", "Moving", "Redirecting", "Turning", "Attacking", "Refueling", "Moving + Turning"];
     const ACTIVITY_COLORS = {
       Idle: "#39ff6a",
       Moving: "#3ee0ff",
       Redirecting: "#ffe14a",
+      Turning: "#d2ff4a",
       Attacking: "#ff8a3d",
-      Refueling: "#ffb020"
+      Refueling: "#ffb020",
+      "Moving + Turning": "#3ee0ff"
     };
     const MAX_HEALTH = 100;
     const PING_WARNING_ENEMY = "> Alert: Hostile signal detected.";
@@ -146,6 +148,7 @@
     const ACCELERATION = 3; // m/s squared; about 2.5 seconds from a stop to full speed
     const DECELERATION = 5; // m/s squared; slows down a bit faster than it speeds up
     const MOVE_STATUS_SPEED = 0.2; // m/s; slower than this, the activity returns to Idle
+    const TURRET_TURN_SPEED = 30; // degrees per second toward the dial target, shortest way
     // Fuel is a percent. It falls only while the machine actually drives. It never refills by itself.
     const MAX_FUEL = 100;
     const FUEL_DRAIN_PER_METER = MAX_FUEL / 70; // a full tank lasts about 70 meters
@@ -239,8 +242,8 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, turretAngle: 0, dialDrag: false, dialHover: "" };
-    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, turretAngle: 0, dialDrag: false, dialHover: "" };
+    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "" };
+    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "" };
 
     // The wall sits in the middle. Each player owns one side of it.
     function getRooms() {
@@ -523,10 +526,14 @@
           battlefieldDirty = true;
         }
       }
+      updateTurret(player, dt);
       const speed = Math.hypot(unit.vx, unit.vy);
+      const turning = player.turretBusy;
       if (player.refueling) setActivity(player, "Refueling");
+      else if (speed > MOVE_STATUS_SPEED && turning) setActivity(player, "Moving + Turning");
+      else if (turning) setActivity(player, "Turning");
       else if (speed > MOVE_STATUS_SPEED) setActivity(player, "Moving");
-      else if (player.activity === "Moving" || player.activity === "Refueling") setActivity(player, "Idle");
+      else if (player.activity === "Moving" || player.activity === "Refueling" || player.activity === "Turning" || player.activity === "Moving + Turning") setActivity(player, "Idle");
       publishFireState(player, unit);
       return moved;
     }
@@ -1908,7 +1915,10 @@
     }
 
     function directionLine(player) {
-      return "Direction: " + turretLabel(player);
+      const actual = angleText(player.actualAngle);
+      const target = angleText(player.targetAngle);
+      if (player.turretBusy && actual !== target) return "Direction: " + actual + " → " + target;
+      return "Direction: " + actual;
     }
 
     function impactLines(player) {
@@ -2411,13 +2421,68 @@
     }
 
     // 0° is battlefield +x. The angle grows counter-clockwise when seen from above.
-    function turretDegrees(player) {
-      const raw = Number(player.turretAngle) || 0;
+    function wrapAngle(degrees) {
+      const raw = Number(degrees) || 0;
       return ((raw % 360) + 360) % 360;
     }
 
+    // Signed turn, -180 to 180. A tie of exactly 180 goes counter-clockwise.
+    function shortestTurn(from, to) {
+      let delta = wrapAngle(to) - wrapAngle(from);
+      if (delta > 180) delta -= 360;
+      if (delta < -180) delta += 360;
+      return delta;
+    }
+
+    function angleText(degrees) {
+      return (Math.round(wrapAngle(degrees)) % 360) + "°";
+    }
+
     function turretLabel(player) {
-      return (Math.round(turretDegrees(player)) % 360) + "°";
+      const actual = angleText(player.actualAngle);
+      const target = angleText(player.targetAngle);
+      if (player.turretBusy && actual !== target) return actual + " → " + target;
+      return actual;
+    }
+
+    // One rotating line for the whole slew, including a drag. The lock is a new line.
+    function noteTurretTurning(player, label) {
+      const text = "> Turret: Rotating to " + label + "...";
+      const line = player.turretLogLine;
+      if (!line || player.messages.indexOf(line) === -1) {
+        player.turretLogLine = { text: text, color: COLOR_MONITOR_TEXT, kind: "turret-turn" };
+        player.messages.push(player.turretLogLine);
+        return;
+      }
+      if (line.text !== text) line.text = text;
+    }
+
+    function noteTurretLocked(player, label) {
+      player.turretLogLine = null;
+      addStatusMessage(player, "> Turret: Locked at " + label + ".");
+    }
+
+    // The dial sets the target. The barrel catches up in updateTurret.
+    function setTurretAngle(player, degrees) {
+      const next = wrapAngle(degrees);
+      player.targetAngle = next;
+      if (!machineStarted) return;
+      if (Math.abs(shortestTurn(player.actualAngle, next)) <= 0.05) return;
+      noteTurretTurning(player, angleText(next));
+    }
+
+    function updateTurret(player, dt) {
+      const target = wrapAngle(player.targetAngle);
+      player.targetAngle = target;
+      const actual = wrapAngle(player.actualAngle);
+      const delta = shortestTurn(actual, target);
+      const step = TURRET_TURN_SPEED * Math.max(0, dt);
+      if (Math.abs(delta) <= step) player.actualAngle = target;
+      else player.actualAngle = wrapAngle(actual + Math.sign(delta) * step);
+      const busy = Math.abs(shortestTurn(player.actualAngle, target)) > 0.001;
+      player.turretBusy = busy;
+      if (!machineStarted) return;
+      if (!busy && player.turretLogLine) noteTurretLocked(player, angleText(target));
     }
 
     function angleFromPointer(cx, cy, x, y) {
@@ -2426,23 +2491,8 @@
       return deg;
     }
 
-    function setTurretAngle(player, degrees) {
-      const next = ((degrees % 360) + 360) % 360;
-      player.turretAngle = next;
-      const unit = battlefield.players[player === player1 ? 0 : 1];
-      const rad = next * Math.PI / 180;
-      const ax = Math.cos(rad);
-      const ay = Math.sin(rad);
-      if (Math.hypot(ax - unit.aimX, ay - unit.aimY) > 0.0004) {
-        unit.aimX = ax;
-        unit.aimY = ay;
-        unit.aimSet = true;
-        battlefieldDirty = true;
-      }
-    }
-
     function nudgeTurret(player, delta) {
-      setTurretAngle(player, turretDegrees(player) + delta);
+      setTurretAngle(player, player.targetAngle + delta);
     }
 
     // Circle, degree line, and optional ±1° buttons. The widget is centered in the box.
@@ -2491,27 +2541,25 @@
         ctx.stroke();
       }
 
-      const deg = turretDegrees(player);
-      const rad = deg * Math.PI / 180;
-      const nx = Math.cos(rad);
-      const ny = -Math.sin(rad);
-      ctx.strokeStyle = player === player1 ? COLOR_P1 : COLOR_P2;
-      ctx.lineWidth = Math.max(2, parts.r * 0.09);
-      ctx.lineCap = "round";
-      ctx.beginPath();
-      ctx.moveTo(parts.cx - nx * parts.r * 0.16, parts.cy - ny * parts.r * 0.16);
-      ctx.lineTo(parts.cx + nx * parts.r * 0.74, parts.cy + ny * parts.r * 0.74);
-      ctx.stroke();
+      const color = player === player1 ? COLOR_P1 : COLOR_P2;
+      if (player.turretBusy) drawTurretNeedle(parts, player.targetAngle, color, 0.32, 0.5, 0.8);
+      drawTurretNeedle(parts, player.actualAngle, color, 1, 1, 0.74);
       ctx.beginPath();
       ctx.arc(parts.cx, parts.cy, Math.max(2.5, parts.r * 0.09), 0, Math.PI * 2);
-      ctx.fillStyle = player === player1 ? COLOR_P1 : COLOR_P2;
+      ctx.fillStyle = color;
       ctx.fill();
 
+      const readout = turretLabel(player);
+      let fontPx = Math.max(10, Math.min(16, Math.floor(parts.label.height * 0.7)));
       ctx.fillStyle = COLOR_MONITOR_TEXT;
-      ctx.font = "bold " + Math.max(10, Math.min(16, Math.floor(parts.label.height * 0.7))) + "px monospace";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(turretLabel(player), parts.label.x + parts.label.width / 2, parts.label.y + parts.label.height / 2);
+      ctx.font = "bold " + fontPx + "px monospace";
+      while (fontPx > 8 && ctx.measureText(readout).width > parts.label.width - 2) {
+        fontPx -= 1;
+        ctx.font = "bold " + fontPx + "px monospace";
+      }
+      ctx.fillText(readout, parts.label.x + parts.label.width / 2, parts.label.y + parts.label.height / 2);
 
       if (parts.ccw && parts.cw) {
         drawDialNudge(parts.ccw, "◀", player.dialHover === "ccw");
@@ -2519,6 +2567,22 @@
       }
       ctx.restore();
       return parts;
+    }
+
+    function drawTurretNeedle(parts, degrees, color, alpha, widthScale, reach) {
+      const rad = wrapAngle(degrees) * Math.PI / 180;
+      const nx = Math.cos(rad);
+      const ny = -Math.sin(rad);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = Math.max(1.5, parts.r * 0.09 * widthScale);
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(parts.cx - nx * parts.r * 0.16, parts.cy - ny * parts.r * 0.16);
+      ctx.lineTo(parts.cx + nx * parts.r * reach, parts.cy + ny * parts.r * reach);
+      ctx.stroke();
+      ctx.restore();
     }
 
     function drawDialNudge(rect, label, hot) {
@@ -3814,7 +3878,7 @@
         unit.canFire = player.canFire;
         battlefieldDirty = true;
       }
-      const aim = aimFromDegrees(turretDegrees(player));
+      const aim = aimFromDegrees(player.actualAngle);
       if (Math.hypot(aim.x - unit.aimX, aim.y - unit.aimY) > 0.0004) {
         unit.aimX = aim.x;
         unit.aimY = aim.y;
@@ -3845,7 +3909,11 @@
       for (let i = 0; i < spots.length; i++) {
         const angle = angleTowardCenter(spots[i].x, spots[i].y);
         const aim = aimFromDegrees(angle);
-        if (owners[i]) owners[i].turretAngle = angle;
+        if (owners[i]) {
+          owners[i].targetAngle = angle;
+          owners[i].actualAngle = angle;
+          owners[i].turretBusy = false;
+        }
         const unit = {
           x: spots[i].x,
           y: spots[i].y,
