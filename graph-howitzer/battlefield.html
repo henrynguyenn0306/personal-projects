@@ -64,7 +64,10 @@
     const COLOR_BUILDING = 0x8a8a96;
     const COLOR_TOWER = 0xc8c8d2;
     const Z_AXIS_HEIGHT = 46;
-    const Z_TICKS = [10, 20, 30, 40];
+    const GRID_METERS = 20;
+    const OUTLINE_Y = 0.08;
+    const SHAPE_Y = 0.14;
+    const OUTLINE_PAD = 0.45;
 
     // Default camera looks from the near-right, so game +y is toward the top of the view
     // and the far-left corner (min x, max game y) sits at the top-left of the field.
@@ -212,10 +215,10 @@
       scene.add(ground);
 
       const positions = [];
-      for (let x = -halfW; x <= halfW + 0.01; x += 10) {
+      for (let x = -halfW; x <= halfW + 0.01; x += GRID_METERS) {
         positions.push(x, 0.04, -halfH, x, 0.04, halfH);
       }
-      for (let z = -halfH; z <= halfH + 0.01; z += 10) {
+      for (let z = -halfH; z <= halfH + 0.01; z += GRID_METERS) {
         positions.push(-halfW, 0.04, z, halfW, 0.04, z);
       }
       const geometry = new THREE.BufferGeometry();
@@ -245,36 +248,27 @@
       arrow.position.set(originX, Z_AXIS_HEIGHT + 3.2, originZ);
       scene.add(arrow);
 
-      const xStep = 30;
-      for (let meters = xStep; meters < width - 0.1; meters += xStep) {
+      for (let meters = GRID_METERS; meters <= width + 0.01; meters += GRID_METERS) {
         addSolid(new THREE.BoxGeometry(0.35, 0.35, 2.4), axis, originX + meters, lift, originZ - 1.4, scene);
         const label = makeTextSprite(String(meters));
         label.position.set(originX + meters, 2.2, originZ - 6);
         scene.add(label);
       }
-      const xEnd = makeTextSprite(String(width));
-      xEnd.position.set(originX + width, 2.2, originZ - 6);
-      scene.add(xEnd);
       const xName = makeTextSprite("x");
       xName.position.set(originX + width + 6, 3, originZ - 2);
       scene.add(xName);
 
-      const yStep = 25;
-      for (let meters = yStep; meters < depth - 0.1; meters += yStep) {
+      for (let meters = GRID_METERS; meters <= depth + 0.01; meters += GRID_METERS) {
         addSolid(new THREE.BoxGeometry(2.4, 0.35, 0.35), axis, originX - 1.4, lift, originZ + meters, scene);
         const label = makeTextSprite(String(meters));
         label.position.set(originX - 7, 2.2, originZ + meters);
         scene.add(label);
       }
-      const yEnd = makeTextSprite(String(depth));
-      yEnd.position.set(originX - 7, 2.2, originZ + depth);
-      scene.add(yEnd);
       const yName = makeTextSprite("y");
       yName.position.set(originX - 3, 3, originZ + depth + 6);
       scene.add(yName);
 
-      for (let i = 0; i < Z_TICKS.length; i++) {
-        const meters = Z_TICKS[i];
+      for (let meters = GRID_METERS; meters <= Z_AXIS_HEIGHT - 4; meters += GRID_METERS) {
         addSolid(new THREE.BoxGeometry(2.6, 0.35, 0.35), axis, originX - 1.6, meters, originZ, scene);
         const label = makeTextSprite(String(meters));
         label.position.set(originX - 8, meters, originZ);
@@ -326,6 +320,31 @@
       fieldReady = true;
     }
 
+    // A filled footprint with a dark rim. Both sit just above the grid.
+    function flatFootprint(kind, wide, deep, color) {
+      const group = new THREE.Group();
+      const outlineMaterial = new THREE.MeshBasicMaterial({ color: 0x14141e, side: THREE.DoubleSide });
+      const fillMaterial = new THREE.MeshBasicMaterial({ color: color, side: THREE.DoubleSide });
+      let outlineGeometry;
+      let fillGeometry;
+      if (kind === "circle") {
+        outlineGeometry = new THREE.CircleGeometry(wide + OUTLINE_PAD, 40);
+        fillGeometry = new THREE.CircleGeometry(wide, 40);
+      } else {
+        outlineGeometry = new THREE.PlaneGeometry(wide + OUTLINE_PAD * 2, deep + OUTLINE_PAD * 2);
+        fillGeometry = new THREE.PlaneGeometry(wide, deep);
+      }
+      const outline = new THREE.Mesh(outlineGeometry, outlineMaterial);
+      outline.rotation.x = -Math.PI / 2;
+      outline.position.y = OUTLINE_Y;
+      const fill = new THREE.Mesh(fillGeometry, fillMaterial);
+      fill.rotation.x = -Math.PI / 2;
+      fill.position.y = SHAPE_Y;
+      group.add(outline);
+      group.add(fill);
+      return group;
+    }
+
     function syncObstacles() {
       const obstacles = battlefield.obstacles || [];
       const signature = signatureOf(obstacles);
@@ -334,50 +353,19 @@
       clearGroup(obstaclesGroup);
       for (let i = 0; i < obstacles.length; i++) {
         const obstacle = obstacles[i];
-        let mesh;
+        let shape;
         if (obstacle.type === "tower") {
-          const radius = obstacle.r || 2;
-          const height = Math.max(8, radius * 5);
-          mesh = new THREE.Mesh(
-            new THREE.CylinderGeometry(radius, radius, height, 20),
-            new THREE.MeshLambertMaterial({ color: COLOR_TOWER })
-          );
-          mesh.position.set(worldX(obstacle.x), height / 2, worldZ(obstacle.y));
+          shape = flatFootprint("circle", obstacle.r || 2, 0, COLOR_TOWER);
         } else {
-          const wide = obstacle.w || 6;
-          const deep = obstacle.h || 6;
-          const height = Math.max(4, Math.min(wide, deep) * 0.9);
-          mesh = new THREE.Mesh(
-            new THREE.BoxGeometry(wide, height, deep),
-            new THREE.MeshLambertMaterial({ color: COLOR_BUILDING })
-          );
-          mesh.position.set(worldX(obstacle.x), height / 2, worldZ(obstacle.y));
+          shape = flatFootprint("rect", obstacle.w || 6, obstacle.h || 6, COLOR_BUILDING);
         }
-        obstaclesGroup.add(mesh);
+        shape.position.set(worldX(obstacle.x), 0, worldZ(obstacle.y));
+        obstaclesGroup.add(shape);
       }
     }
 
-    function playerMaterial(color) {
-      return new THREE.MeshLambertMaterial({ color: color, emissive: color, emissiveIntensity: 0.55 });
-    }
-
     function makeMachine(color) {
-      const group = new THREE.Group();
-      const bodyHeight = 4;
-      const material = playerMaterial(color);
-      const body = new THREE.Mesh(
-        new THREE.BoxGeometry(PLAYER_SIZE, bodyHeight, PLAYER_SIZE),
-        material
-      );
-      body.position.y = bodyHeight / 2;
-      const turret = new THREE.Mesh(
-        new THREE.CylinderGeometry(1.5, 1.7, 1.6, 16),
-        playerMaterial(color)
-      );
-      turret.position.y = bodyHeight + 0.8;
-      group.add(body);
-      group.add(turret);
-      return group;
+      return flatFootprint("rect", PLAYER_SIZE, PLAYER_SIZE, color);
     }
 
     function playerCaption(index, player) {
@@ -403,7 +391,7 @@
         machine.position.set(worldX(player.x), 0, worldZ(player.y));
         const label = machineLabels[i];
         setSpriteText(label, playerCaption(i, player));
-        label.position.set(worldX(player.x), 9, worldZ(player.y));
+        label.position.set(worldX(player.x), 4, worldZ(player.y));
       }
     }
 
