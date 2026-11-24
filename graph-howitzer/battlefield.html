@@ -646,7 +646,8 @@
       return NaN;
     }
 
-    // Same trace as the fire station, including the part below the ground.
+    // Same trace as the fire station. drawPoints drops a final underground run
+    // that never climbs back above the ground.
     function firingCurve(tree) {
       return GraphHowitzerFire.traceShell(function (x) {
         return evalExpr(tree, x);
@@ -726,10 +727,13 @@
       const tree = parseExpression(player.equation);
       if (!tree) return null;
       const curve = firingCurve(tree);
-      if (!curve || curve.points.length < 2) return null;
+      if (!curve || !curve.points || curve.points.length < 2) return null;
+      const drawn = curve.drawPoints || [];
+      const showImpact = !!(curve.impact && curve.distance !== null && isFinite(curve.distance));
+      if (drawn.length < 2 && !showImpact) return null;
       const aim = aimOf(player);
       const group = new THREE.Group();
-      const runs = GraphHowitzerFire.splitGround(curve.points);
+      const runs = drawn.length > 1 ? GraphHowitzerFire.splitGround(drawn) : { above: [], below: [] };
       const solid = new THREE.LineBasicMaterial({
         color: color,
         polygonOffset: true,
@@ -749,7 +753,7 @@
       addWorldRuns(group, player, aim, runs.above, solid, false);
       addWorldRuns(group, player, aim, runs.below, dashed, true);
       group.userData.peak = curve.high || 0;
-      if (curve.impact && curve.distance !== null) {
+      if (showImpact) {
         const impactAt = arcWorld(player, aim, curve.distance, 0);
         group.add(makeGroundX(color, impactAt));
       }

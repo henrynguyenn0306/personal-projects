@@ -1,6 +1,9 @@
 // One trajectory for the fire station and the battlefield.
-// The line runs across the whole range, including below the ground.
-// The impact is the first return to height 0. No eval or Function is used.
+// The sample runs across the whole capped range. drawPoints is the part to stroke:
+// a stretch under the ground is kept only when the curve rises back above the
+// ground later, inside the range. A last descent that never returns stops at
+// that crossing. The impact is still the first return to height 0.
+// No eval or Function is used.
 (function (root) {
   var SAMPLE_STEP = 0.1;
   var MAX_DISTANCE = 240;
@@ -87,6 +90,45 @@
       }
     }
     points.push({ x: x, y: y });
+  }
+
+  var GROUND_EPS = 1e-4;
+
+  function crossZero(q, p) {
+    var denom = q.y - p.y;
+    var t = denom === 0 ? 0 : q.y / denom;
+    if (t < 0) t = 0;
+    if (t > 1) t = 1;
+    return { x: q.x + (p.x - q.x) * t, y: 0 };
+  }
+
+  // Stroke only the part we want on screen. Underground stays when the shell
+  // comes back up later in the sampled range. Otherwise the line ends on the
+  // ground at the start of that last descent.
+  function drawablePoints(points) {
+    if (!points || !points.length) return [];
+    var everAbove = false;
+    for (var i = 0; i < points.length; i++) {
+      if (points[i].y > GROUND_EPS) everAbove = true;
+    }
+    if (!everAbove) return [];
+    var stop = null;
+    for (var n = 1; n < points.length; n++) {
+      var q = points[n - 1];
+      var p = points[n];
+      if (q.y >= -GROUND_EPS && p.y < -GROUND_EPS) stop = crossZero(q, p);
+      if (p.y > GROUND_EPS) stop = null;
+    }
+    if (!stop) return points;
+    var out = [];
+    for (var k = 0; k < points.length; k++) {
+      if (points[k].x < stop.x - 1e-4) out.push(points[k]);
+      else break;
+    }
+    if (!out.length || Math.abs(out[out.length - 1].x - stop.x) > 1e-4 || Math.abs(out[out.length - 1].y) > 1e-4) {
+      out.push(stop);
+    }
+    return out;
   }
 
   // Above-ground runs and below-ground runs. A shared point sits on y = 0.
@@ -238,6 +280,7 @@
       peakX: peakX,
       time: (impactX !== null ? arcHit : arcAll) / speed,
       points: points,
+      drawPoints: drawablePoints(points),
       high: high
     };
   }

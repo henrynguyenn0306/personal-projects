@@ -166,12 +166,15 @@
     const LOW_FUEL_TEXT = "> Warning: Fuel low (<20%).";
     const OUT_OF_FUEL_TEXT = "> Alert: Fuel depleted. Propulsion offline.";
     // Fire control is the equation station. No shell is launched from it yet.
-    const FIRE_GRAPH_X_MAX = 100; // meters along the firing direction
+    const FIRE_GRAPH_X_MAX = 100; // fixed graph: meters along the firing direction
+    const FIRE_GRAPH_Y_MAX = 100; // fixed graph: meters of height above the ground
+    const FIRE_GRAPH_BELOW = 12; // fixed graph: meters of strip under the ground line
     const FIRE_EQUATION_MAX = 64;
     const FIRE_DEFAULT_EQUATION = "-0.05x^2 + 2x";
     const SHELL_SPEED = 20; // m/s along the path, not along the ground
-    const FIRE_KEY_COLS = 6;
-    // Compact grid. CLR and DONE are wider. √( and the other calls insert the opening parenthesis.
+    const FIRE_KEY_COLS = 12;
+    // Three short rows across the zoom window. CLR and DONE are wider.
+    // √( and the other calls insert the opening parenthesis.
     const FIRE_KEYS = [
       { label: "7", insert: "7" },
       { label: "8", insert: "8" },
@@ -1897,7 +1900,7 @@
       player.canFire = !!(parsed.tree && drawn);
     }
 
-    // Shared with the battlefield viewer. The trace draws the whole capped curve.
+    // Shared with the battlefield viewer. drawPoints stops a final underground run.
     function traceEquation(tree) {
       return GraphHowitzerFire.traceShell(function (x) {
         return evalExpr(tree, x);
@@ -2070,8 +2073,65 @@
       return kept.map(function (entry) { return entry.tick; });
     }
 
-    // Flat plot of the shared trace. x is ground distance, y is height a. Ground stays at 0.
-    function drawShellGraph(screen, tree, flight) {
+    function graphPoints(flight) {
+      if (!flight) return [];
+      if (flight.drawPoints) return flight.drawPoints;
+      if (flight.points) return flight.points;
+      return [];
+    }
+
+    function fillAxisArrow(x, y, angle, size) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(-size, size * 0.42);
+      ctx.lineTo(-size, -size * 0.42);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Curve and impact marker, clipped to the plot. The trace itself is not shortened.
+    function strokeShellCurve(plot, px, py, points, tree, flight, arm) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(plot.x, plot.y, plot.w, plot.h);
+      ctx.clip();
+      if (points.length > 1 && tree) {
+        const runs = GraphHowitzerFire.splitGround(points);
+        ctx.lineWidth = 2;
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
+        ctx.strokeStyle = COLOR_MONITOR_TEXT;
+        ctx.setLineDash([]);
+        strokeGraphRuns(runs.above, px, py);
+        ctx.strokeStyle = "rgba(57, 255, 106, 0.62)";
+        ctx.setLineDash([5, 4]);
+        strokeGraphRuns(runs.below, px, py);
+        ctx.setLineDash([]);
+      }
+      if (flight && flight.impact && isFinite(flight.distance)) {
+        const markX = px(flight.distance);
+        const markY = py(0);
+        ctx.strokeStyle = "#ffb020";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(markX, markY, arm + 3, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(markX - arm, markY - arm);
+        ctx.lineTo(markX + arm, markY + arm);
+        ctx.moveTo(markX + arm, markY - arm);
+        ctx.lineTo(markX - arm, markY + arm);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Zoom graph. x and height are both 0 to 100 m, with a short strip under the ground.
+    function drawFixedShellGraph(screen, tree, flight) {
       ctx.save();
       ctx.beginPath();
       ctx.rect(screen.x, screen.y, screen.w, screen.h);
@@ -2079,7 +2139,105 @@
       ctx.fillStyle = COLOR_RADAR_SCREEN;
       ctx.fillRect(screen.x, screen.y, screen.w, screen.h);
 
-      const points = flight && flight.points ? flight.points : [];
+      const fontPx = screen.h < 160 || screen.w < 180 ? 11 : 13;
+      ctx.font = fontPx + "px monospace";
+      const padL = Math.min(screen.w * 0.28, Math.max(28, ctx.measureText("100").width + 10));
+      const padB = fontPx + 8;
+      const padT = 8;
+      const padR = 14;
+      const plotX = screen.x + padL;
+      const plotY = screen.y + padT;
+      const plotW = Math.max(8, screen.w - padL - padR);
+      const plotH = Math.max(8, screen.h - padT - padB);
+      const xMax = FIRE_GRAPH_X_MAX;
+      const yMax = FIRE_GRAPH_Y_MAX;
+      const ySpan = yMax + FIRE_GRAPH_BELOW;
+
+      function px(x) {
+        return plotX + (x / xMax) * plotW;
+      }
+      function py(y) {
+        return plotY + ((yMax - y) / ySpan) * plotH;
+      }
+
+      const originY = py(0);
+      const axis = "rgba(216, 255, 228, 0.9)";
+      ctx.strokeStyle = axis;
+      ctx.fillStyle = axis;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(plotX, originY);
+      ctx.lineTo(plotX, plotY);
+      ctx.moveTo(plotX, originY);
+      ctx.lineTo(plotX + plotW, originY);
+      ctx.stroke();
+      const arrow = Math.max(7, Math.min(11, fontPx));
+      fillAxisArrow(plotX + plotW, originY, 0, arrow);
+      fillAxisArrow(plotX, plotY, -Math.PI / 2, arrow);
+
+      ctx.strokeStyle = "rgba(216, 255, 228, 0.55)";
+      ctx.lineWidth = 1;
+      for (let value = 20; value < xMax - 0.01; value += 20) {
+        const at = px(value);
+        ctx.beginPath();
+        ctx.moveTo(at, originY);
+        ctx.lineTo(at, originY + 4);
+        ctx.stroke();
+      }
+      for (let value = 20; value < yMax - 0.01; value += 20) {
+        const at = py(value);
+        ctx.beginPath();
+        ctx.moveTo(plotX - 4, at);
+        ctx.lineTo(plotX, at);
+        ctx.stroke();
+      }
+
+      strokeShellCurve(
+        { x: plotX, y: plotY, w: plotW, h: plotH },
+        px,
+        py,
+        graphPoints(flight),
+        tree,
+        flight,
+        screen.h < 170 ? 4 : 6
+      );
+
+      ctx.fillStyle = COLOR_RADAR_YOU;
+      ctx.font = fontPx + "px monospace";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      ctx.fillText("a", plotX + 8, plotY + 3);
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText("x", plotX + plotW + 3, originY);
+      ctx.textBaseline = "top";
+      for (let value = 0; value <= xMax + 0.01; value += 20) {
+        const at = px(value);
+        ctx.textAlign = value <= 0.01 ? "left" : (value >= xMax - 0.01 ? "right" : "center");
+        ctx.fillText(String(value), at, originY + 6);
+      }
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      for (let value = 20; value <= yMax + 0.01; value += 20) {
+        ctx.fillText(String(value), plotX - 6, py(value));
+      }
+      ctx.restore();
+    }
+
+    // Flat plot of the shared trace. x is ground distance, y is height a. Ground stays at 0.
+    function drawShellGraph(screen, tree, flight, fixedRange) {
+      if (fixedRange) {
+        drawFixedShellGraph(screen, tree, flight);
+        return;
+      }
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(screen.x, screen.y, screen.w, screen.h);
+      ctx.clip();
+      ctx.fillStyle = COLOR_RADAR_SCREEN;
+      ctx.fillRect(screen.x, screen.y, screen.w, screen.h);
+
+      const points = graphPoints(flight);
       let yMin = 0;
       let yMax = 0;
       let xMax = 0;
@@ -2493,16 +2651,6 @@
       return { cols: cols, rows: col === 0 ? row : row + 1, placed: placed };
     }
 
-    // The pad uses the full height of the zoom screen so the keys reach the bottom.
-    function firePadMetrics(maxW, maxH) {
-      const layout = fireKeyPlacements();
-      const inset = 4;
-      let width = 36 * layout.cols + inset * 2;
-      if (maxW && width > maxW) width = maxW;
-      const height = maxH > 80 ? maxH : 26 * layout.rows + inset * 2;
-      return { width: width, height: height };
-    }
-
     function fireKeyCells(rect) {
       const layout = fireKeyPlacements();
       const inset = 3;
@@ -2519,7 +2667,7 @@
       return cells;
     }
 
-    // The right side of the fire zoom window. Buttons stay small instead of stretching.
+    // Wide keypad along the bottom of the fire zoom window.
     function drawFireKeys(rect, player) {
       ctx.save();
       ctx.fillStyle = COLOR_JOYSTICK_WELL;
@@ -2554,30 +2702,39 @@
       ctx.restore();
     }
 
-    // Graph and turret dial share the left side. Keypad fills the right side.
+    // Two short rows under the equation. A 3-line error stays in one column so it can be read.
+    function drawFireReadouts(rect, player) {
+      const lines = impactLines(player);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(rect.x, rect.y, rect.width, rect.height);
+      ctx.clip();
+      const fontPx = rect.height < 40 ? 12 : 13;
+      ctx.font = fontPx + "px monospace";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = player.canFire ? COLOR_MONITOR_TEXT : COLOR_MONITOR_WARNING;
+      const cols = lines.length === 3 ? 1 : 2;
+      const rows = Math.ceil(lines.length / cols);
+      const colW = rect.width / cols;
+      const rowH = rect.height / rows;
+      for (let i = 0; i < lines.length; i++) {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        ctx.fillText(lines[i], rect.x + col * colW + 2, rect.y + row * rowH + rowH / 2);
+      }
+      ctx.restore();
+    }
+
+    // Equation and readouts on top, graph and dial in the middle, keypad across the bottom.
     function drawFireZoom(player, view) {
       syncEquation(player);
       drawEquationField(view.equation, player, "16px monospace", true);
+      drawFireReadouts(view.readouts, player);
       if (view.graph.h > 24 && view.graph.w > 24) {
-        drawShellGraph(view.graph, player.equationTree, player.flight);
+        drawShellGraph(view.graph, player.equationTree, player.flight, true);
       }
       if (view.dial.width > 24 && view.dial.height > 24) drawTurretDial(view.dial, player, true);
-
-      const lines = impactLines(player);
-      const info = view.readouts;
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(info.x, info.y, info.width, info.height);
-      ctx.clip();
-      ctx.font = "14px monospace";
-      ctx.textAlign = "left";
-      ctx.textBaseline = "top";
-      ctx.fillStyle = player.canFire ? COLOR_MONITOR_TEXT : COLOR_MONITOR_WARNING;
-      const lineH = info.height / Math.max(lines.length, 1);
-      for (let i = 0; i < lines.length; i++) {
-        ctx.fillText(lines[i], info.x, info.y + i * lineH + 1);
-      }
-      ctx.restore();
       drawFireKeys(view.keypad, player);
     }
 
@@ -3220,7 +3377,7 @@
       if (pointInRect(tip.x, tip.y, equation)) player.caret = caretFromPoint(player, tip.x, equation);
     }
 
-    // Screen area inside a zoom frame, plus the fire keypad on its right half.
+    // Screen area inside a zoom frame. Fire control stacks equation, plot, and keypad.
     function zoomContent(room) {
       const panel = getZoomRect(room);
       const bezel = Math.min(MONITOR_BEZEL, panel.width / 6, panel.height / 6);
@@ -3229,29 +3386,38 @@
       const screenW = panel.width - bezel * 2;
       const screenH = panel.height - bezel * 2 - 8;
       const gap = 8;
-      const pad = firePadMetrics(Math.floor(screenW * 0.42), screenH);
-      const leftW = Math.max(48, screenW - gap - pad.width);
-      const eqH = 32;
-      const infoH = 92;
-      const rowY = screenY + eqH + gap;
-      const rowH = Math.max(40, screenH - eqH - gap - gap - infoH);
-      const dialW = Math.max(96, Math.min(148, leftW * 0.46, rowH));
-      const graphW = Math.max(48, leftW - gap - dialW);
+      const inset = 8;
+      const innerX = screenX + inset;
+      const innerY = screenY + inset;
+      const innerW = Math.max(40, screenW - inset * 2);
+      const innerH = Math.max(40, screenH - inset * 2);
+      const eqH = Math.max(26, Math.min(32, innerH * 0.07));
+      const infoH = Math.max(36, Math.min(46, innerH * 0.1));
+      const keyRows = fireKeyPlacements().rows;
+      let padH = Math.min(innerH * 0.32, 40 * keyRows + 8);
+      let midH = innerH - eqH - 4 - infoH - gap - padH - gap;
+      if (midH < 72) {
+        padH = Math.max(68, innerH - eqH - 4 - infoH - gap * 2 - 72);
+        midH = innerH - eqH - 4 - infoH - gap - padH - gap;
+      }
+      const infoY = innerY + eqH + 4;
+      const midY = infoY + infoH + gap;
+      const half = Math.max(20, (innerW - gap) / 2);
       return {
         panel: panel,
         screenX: screenX,
         screenY: screenY,
         screenW: screenW,
         screenH: screenH,
-        equation: { x: screenX, y: screenY, width: leftW, height: eqH },
-        graph: { x: screenX, y: rowY, w: graphW, h: rowH },
-        dial: { x: screenX + graphW + gap, y: rowY, width: dialW, height: rowH },
-        readouts: { x: screenX, y: screenY + screenH - infoH, width: leftW, height: infoH },
+        equation: { x: innerX, y: innerY, width: innerW, height: eqH },
+        readouts: { x: innerX, y: infoY, width: innerW, height: infoH },
+        graph: { x: innerX, y: midY, w: half, h: Math.max(20, midH) },
+        dial: { x: innerX + half + gap, y: midY, width: half, height: Math.max(20, midH) },
         keypad: {
-          x: screenX + leftW + gap,
-          y: screenY,
-          width: pad.width,
-          height: pad.height
+          x: innerX,
+          y: midY + Math.max(20, midH) + gap,
+          width: innerW,
+          height: Math.max(40, padH)
         }
       };
     }
