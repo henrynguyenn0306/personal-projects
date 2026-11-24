@@ -174,6 +174,7 @@
     const FIRE_GRAPH_BELOW = 12; // fixed graph: meters of strip under the ground line
     const FIRE_EQUATION_MAX = 64;
     const FIRE_DEFAULT_EQUATION = "-0.05x^2 + 2x";
+    const EQUATION_PREFIX = "y = ";
     const SHELL_SPEED = 20; // m/s along the path, not along the ground
     const FIRE_KEY_COLS = 12;
     // Three short rows across the zoom window. CLR and DONE are wider.
@@ -751,6 +752,10 @@
       if (player.panelKind === "turret") {
         const hit = dialUnderPoint(player, room);
         player.dialHover = hit;
+        const dial = zoomContent(room, "turret").dial;
+        const parts = dial ? turretDialParts(dial, true) : null;
+        const overFace = parts && Math.hypot(player.pointX - parts.cx, player.pointY - parts.cy) <= parts.r + 6;
+        player.dialAim = overFace ? angleFromPointer(parts.cx, parts.cy, player.pointX, player.pointY) : null;
         if (player.dialDrag) {
           const key = player === player1 ? INTERACT_KEY_P1 : INTERACT_KEY_P2;
           if (keys[key]) applyDialDrag(player, room);
@@ -758,7 +763,11 @@
         }
       } else if (player.panelKind === "fire") {
         player.dialHover = "";
+        player.dialAim = null;
         player.fireIndex = keyUnderPoint(player, room);
+      } else {
+        player.dialHover = "";
+        player.dialAim = null;
       }
     }
 
@@ -1533,6 +1542,7 @@
       player.fireIndex = -1;
       player.dialDrag = false;
       player.dialHover = "";
+      player.dialAim = null;
     }
 
     // Keypad cell under the fingertip, or -1 when the tip is somewhere else.
@@ -1939,21 +1949,11 @@
       return ["Impact distance: " + flight.distance.toFixed(1) + " m", peak, time, direction];
     }
 
-    function stationFireNote(player) {
-      if (!player.canFire) {
-        if (!player.equationTree) return "Cannot fire: syntax error";
-        return "Cannot fire: no curve";
-      }
-      if (!player.flight.impact) return "Impact: none in range";
-      const flight = player.flight;
-      return flight.distance.toFixed(1) + " m · " + flight.peak.toFixed(1) + " m · " + flight.time.toFixed(1) + " s";
-    }
-
     // Keep the caret inside the black bar when the formula is wider than the field.
     function equationScroll(rect, player, font) {
       ctx.font = font;
       const caret = playerCaret(player);
-      const caretX = ctx.measureText("a = " + player.equation.slice(0, caret)).width;
+      const caretX = ctx.measureText(EQUATION_PREFIX + player.equation.slice(0, caret)).width;
       const view = Math.max(8, rect.width - 16);
       let scroll = player.eqScroll || 0;
       if (caretX - scroll > view - 2) scroll = caretX - view + 2;
@@ -1975,7 +1975,7 @@
       let best = 0;
       let bestDist = Infinity;
       for (let i = 0; i < stops.length; i++) {
-        const width = ctx.measureText("a = " + text.slice(0, stops[i])).width;
+        const width = ctx.measureText(EQUATION_PREFIX + text.slice(0, stops[i])).width;
         const dist = Math.abs(x - (origin + width));
         if (dist < bestDist) {
           bestDist = dist;
@@ -1983,6 +1983,18 @@
         }
       }
       return best;
+    }
+
+    // One line for the plate. Cut the formula, not the "y = " prefix, when the bar is short.
+    function plateEquationLine(text, maxWidth) {
+      const full = EQUATION_PREFIX + text;
+      if (ctx.measureText(full).width <= maxWidth) return full;
+      const dots = "...";
+      if (ctx.measureText(dots).width > maxWidth) return "";
+      let end = text.length;
+      while (end > 0 && ctx.measureText(EQUATION_PREFIX + text.slice(0, end) + dots).width > maxWidth) end -= 1;
+      if (end === 0 && ctx.measureText(EQUATION_PREFIX + dots).width > maxWidth) return dots;
+      return EQUATION_PREFIX + text.slice(0, end) + dots;
     }
 
     // The formula always stays on screen. A syntax error tints it and underlines the bad spot.
@@ -2001,10 +2013,13 @@
       const scroll = showCaret ? equationScroll(rect, player, font) : 0;
       const origin = rect.x + 8 - scroll;
       const baseline = rect.y + rect.height / 2;
+      const maxWidth = Math.max(8, rect.width - 16);
+      const line = showCaret ? EQUATION_PREFIX + text : plateEquationLine(text, maxWidth);
+      const truncated = line !== EQUATION_PREFIX + text;
       ctx.fillStyle = bad ? COLOR_MONITOR_WARNING : COLOR_MONITOR_TEXT;
-      ctx.fillText("a = " + text, origin, baseline);
-      if (bad && typeof player.equationErrorAt === "number" && player.equationErrorAt >= 0 && player.equationErrorAt <= text.length) {
-        const before = "a = " + text.slice(0, player.equationErrorAt);
+      ctx.fillText(line, origin, baseline);
+      if (!truncated && bad && typeof player.equationErrorAt === "number" && player.equationErrorAt >= 0 && player.equationErrorAt <= text.length) {
+        const before = EQUATION_PREFIX + text.slice(0, player.equationErrorAt);
         const mark = text.charAt(player.equationErrorAt) || " ";
         const x0 = origin + ctx.measureText(before).width;
         const markW = Math.max(6, ctx.measureText(mark).width);
@@ -2017,23 +2032,11 @@
       }
       if (showCaret && Math.floor(frameTime / 530) % 2 === 0) {
         const caret = playerCaret(player);
-        const caretX = origin + ctx.measureText("a = " + text.slice(0, caret)).width;
+        const caretX = origin + ctx.measureText(EQUATION_PREFIX + text.slice(0, caret)).width;
         ctx.fillStyle = bad ? COLOR_MONITOR_WARNING : COLOR_MONITOR_TEXT;
         ctx.fillRect(caretX, rect.y + 6, 2, rect.height - 12);
       }
       ctx.restore();
-    }
-
-    function niceTickStep(span) {
-      if (!(span > 0)) return 1;
-      const raw = span / 4;
-      const pow = Math.pow(10, Math.floor(Math.log10(raw)));
-      const n = raw / pow;
-      let step = 10;
-      if (n < 1.5) step = 1;
-      else if (n < 3.5) step = 2;
-      else if (n < 7.5) step = 5;
-      return step * pow;
     }
 
     function strokeGraphRuns(runs, px, py) {
@@ -2045,44 +2048,6 @@
         for (let i = 1; i < run.length; i++) ctx.lineTo(px(run[i].x), py(run[i].y));
         ctx.stroke();
       }
-    }
-
-    function graphTickText(value) {
-      if (Math.abs(value) < 1e-6) return "0";
-      const rounded = Math.round(value);
-      if (Math.abs(value - rounded) < 0.05) return String(rounded);
-      return value.toFixed(1);
-    }
-
-    function graphTickValues(min, max) {
-      const span = Math.max(max - min, 1e-6);
-      const step = niceTickStep(span);
-      const values = [];
-      let value = Math.ceil(min / step - 1e-6) * step;
-      for (let n = 0; n < 16 && value <= max + step * 0.02; n++) {
-        let shown = value;
-        if (Math.abs(shown) < step * 0.08) shown = 0;
-        if (shown >= min - step * 0.02 && shown <= max + step * 0.02) values.push(shown);
-        value += step;
-      }
-      return values;
-    }
-
-    // Keep the ticks that name the range. Later ticks give way when the labels would overlap.
-    function graphTicksThatFit(ticks, gap) {
-      const ordered = ticks.slice().sort(function (a, b) { return a.priority - b.priority; });
-      const kept = [];
-      for (let i = 0; i < ordered.length; i++) {
-        const tick = ordered[i];
-        const start = tick.at - tick.size / 2;
-        const end = tick.at + tick.size / 2;
-        let blocked = false;
-        for (let k = 0; k < kept.length; k++) {
-          if (start < kept[k].end + gap && end > kept[k].start - gap) blocked = true;
-        }
-        if (!blocked) kept.push({ start: start, end: end, tick: tick });
-      }
-      return kept.map(function (entry) { return entry.tick; });
     }
 
     function graphPoints(flight) {
@@ -2218,7 +2183,7 @@
       ctx.font = fontPx + "px monospace";
       ctx.textAlign = "left";
       ctx.textBaseline = "top";
-      ctx.fillText("a", plotX + 8, plotY + 3);
+      ctx.fillText("y", plotX + 8, plotY + 3);
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
       ctx.fillText("x", plotX + plotW + 3, originY);
@@ -2236,7 +2201,7 @@
       ctx.restore();
     }
 
-    // Flat plot of the shared trace. x is ground distance, y is height a. Ground stays at 0.
+    // Plate graph. Axes with arrowheads and the curve only. No tick numbers.
     function drawShellGraph(screen, tree, flight, fixedRange) {
       if (fixedRange) {
         drawFixedShellGraph(screen, tree, flight);
@@ -2269,20 +2234,13 @@
       const pad = (yMax - yMin) * 0.08;
       yMin -= pad;
       yMax += pad;
+      xMax *= 1.06;
       const ySpan = yMax - yMin;
 
-      const fontPx = screen.h < 170 || screen.w < 220 ? 10 : 13;
-      ctx.font = fontPx + "px monospace";
-      const yValues = graphTickValues(yMin, yMax);
-      let widest = ctx.measureText("a").width;
-      for (let i = 0; i < yValues.length; i++) {
-        const width = ctx.measureText(graphTickText(yValues[i]) + " m").width;
-        if (width > widest) widest = width;
-      }
-      const padL = Math.min(screen.w * 0.34, Math.max(28, widest + 12));
-      const padB = fontPx + 10;
-      const padT = fontPx + 6;
-      const padR = 8;
+      const padL = 8;
+      const padR = 14;
+      const padT = 8;
+      const padB = 8;
       const plotX = screen.x + padL;
       const plotY = screen.y + padT;
       const plotW = Math.max(8, screen.w - padL - padR);
@@ -2295,130 +2253,39 @@
         return plotY + (1 - (y - yMin) / ySpan) * plotH;
       }
 
-      ctx.strokeStyle = "rgba(216, 255, 228, 0.4)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(plotX, plotY);
-      ctx.lineTo(plotX, plotY + plotH);
-      ctx.stroke();
-      const groundY = py(0);
-      ctx.strokeStyle = "rgba(57, 255, 106, 0.7)";
+      const originY = py(0);
+      const axis = "rgba(216, 255, 228, 0.9)";
+      ctx.strokeStyle = axis;
+      ctx.fillStyle = axis;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.moveTo(plotX, groundY);
-      ctx.lineTo(plotX + plotW, groundY);
+      ctx.moveTo(plotX, plotY + plotH);
+      ctx.lineTo(plotX, plotY);
+      ctx.moveTo(px(0), originY);
+      ctx.lineTo(plotX + plotW, originY);
       ctx.stroke();
+      const arrow = Math.max(6, Math.min(9, screen.h * 0.08));
+      fillAxisArrow(plotX + plotW, originY, 0, arrow);
+      fillAxisArrow(plotX, plotY, -Math.PI / 2, arrow);
+
+      strokeShellCurve(
+        { x: plotX, y: plotY, w: plotW, h: plotH },
+        px,
+        py,
+        points,
+        tree,
+        flight,
+        screen.h < 170 ? 4 : 6
+      );
 
       ctx.fillStyle = COLOR_RADAR_YOU;
-      ctx.font = fontPx + "px monospace";
-      ctx.textAlign = "right";
-      ctx.textBaseline = "bottom";
-      ctx.fillText("a", plotX - 6, plotY - 1);
-
-      const yTicks = [];
-      for (let i = 0; i < yValues.length; i++) {
-        const value = yValues[i];
-        const text = graphTickText(value) + " m";
-        const at = py(value);
-        let priority = 2;
-        if (Math.abs(value) < 1e-6) priority = 0;
-        else if (i === 0 || i === yValues.length - 1) priority = 1;
-        yTicks.push({ value: value, text: text, at: at, size: fontPx, priority: priority });
-      }
-      const yKept = graphTicksThatFit(yTicks, 2);
-      ctx.textAlign = "right";
-      ctx.textBaseline = "middle";
-      for (let i = 0; i < yKept.length; i++) {
-        const tick = yKept[i];
-        ctx.strokeStyle = "rgba(216, 255, 228, 0.45)";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(plotX - 4, tick.at);
-        ctx.lineTo(plotX, tick.at);
-        ctx.stroke();
-        ctx.fillStyle = COLOR_RADAR_YOU;
-        ctx.fillText(tick.text, plotX - 6, tick.at);
-      }
-
-      const xValues = graphTickValues(0, xMax);
-      const xStep = niceTickStep(Math.max(xMax, 1));
-      if (!xValues.length || Math.abs(xValues[xValues.length - 1] - xMax) > xStep * 0.3) xValues.push(xMax);
-      const xTicks = [];
-      for (let i = 0; i < xValues.length; i++) {
-        const value = Math.min(xMax, xValues[i]);
-        const text = graphTickText(value) + " m";
-        const anchor = px(value);
-        const size = ctx.measureText(text).width;
-        let align = "center";
-        let center = anchor;
-        let priority = 2;
-        if (value <= 0.001) {
-          align = "left";
-          center = anchor + size / 2;
-          priority = 0;
-        } else if (Math.abs(value - xMax) < 0.05) {
-          align = "right";
-          center = anchor - size / 2;
-          priority = 0;
-        }
-        xTicks.push({
-          value: value,
-          text: text,
-          anchor: anchor,
-          at: center,
-          size: size,
-          align: align,
-          priority: priority
-        });
-      }
-      const xKept = graphTicksThatFit(xTicks, 6);
-      const labelY = plotY + plotH + 3;
+      ctx.font = "11px monospace";
+      ctx.textAlign = "left";
       ctx.textBaseline = "top";
-      for (let i = 0; i < xKept.length; i++) {
-        const tick = xKept[i];
-        ctx.strokeStyle = "rgba(216, 255, 228, 0.45)";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(tick.anchor, plotY + plotH);
-        ctx.lineTo(tick.anchor, plotY + plotH + 4);
-        ctx.stroke();
-        ctx.fillStyle = COLOR_RADAR_YOU;
-        ctx.textAlign = tick.align;
-        ctx.fillText(tick.text, tick.anchor, labelY);
-      }
-
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(plotX, plotY, plotW, plotH);
-      ctx.clip();
-      if (points.length > 1 && tree) {
-        const runs = GraphHowitzerFire.splitGround(points);
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = COLOR_MONITOR_TEXT;
-        ctx.setLineDash([]);
-        strokeGraphRuns(runs.above, px, py);
-        ctx.strokeStyle = "rgba(57, 255, 106, 0.62)";
-        ctx.setLineDash([5, 4]);
-        strokeGraphRuns(runs.below, px, py);
-        ctx.setLineDash([]);
-      }
-      if (flight && flight.impact) {
-        const markX = px(flight.distance);
-        const markY = py(0);
-        const arm = screen.h < 170 ? 4 : 6;
-        ctx.strokeStyle = "#ffb020";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(markX, markY, arm + 3, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(markX - arm, markY - arm);
-        ctx.lineTo(markX + arm, markY + arm);
-        ctx.moveTo(markX + arm, markY - arm);
-        ctx.lineTo(markX - arm, markY + arm);
-        ctx.stroke();
-      }
-      ctx.restore();
+      ctx.fillText("y", plotX + 6, plotY + 2);
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText("x", plotX + plotW + 2, originY);
       ctx.restore();
     }
 
@@ -2520,9 +2387,111 @@
       return { box: box, cx: cx, cy: cy, r: r, ccw: ccw, cw: cw, label: label };
     }
 
+    // Light top-left edge and dark bottom-right edge, the same bevel the other plates use.
+    function drawPanelOutline(rect) {
+      ctx.save();
+      ctx.lineWidth = 2;
+      ctx.lineJoin = "miter";
+      ctx.strokeStyle = COLOR_JOYSTICK_EDGE_LIGHT;
+      ctx.beginPath();
+      ctx.moveTo(rect.x + rect.width - 1.5, rect.y + 1);
+      ctx.lineTo(rect.x + 1, rect.y + 1);
+      ctx.lineTo(rect.x + 1, rect.y + rect.height - 1.5);
+      ctx.stroke();
+      ctx.strokeStyle = COLOR_JOYSTICK_EDGE_DARK;
+      ctx.beginPath();
+      ctx.moveTo(rect.x + rect.width - 1, rect.y + 1.5);
+      ctx.lineTo(rect.x + rect.width - 1, rect.y + rect.height - 1);
+      ctx.lineTo(rect.x + 1.5, rect.y + rect.height - 1);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function dialPoint(parts, degrees, radius) {
+      const rad = wrapAngle(degrees) * Math.PI / 180;
+      return {
+        x: parts.cx + Math.cos(rad) * radius,
+        y: parts.cy - Math.sin(rad) * radius
+      };
+    }
+
+    // Dots every 45°. The big dial names them; the plate dial only decorates.
+    function drawDialMarks(parts, labeled, hover) {
+      const dotR = Math.max(2, Math.min(3.4, parts.r * 0.035));
+      ctx.save();
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = Math.max(9, Math.min(12, Math.floor(parts.r * 0.075))) + "px monospace";
+      for (let deg = 0; deg < 360; deg += 45) {
+        const spot = dialPoint(parts, deg, parts.r * 0.9);
+        const hot = labeled && hover === "mark:" + deg;
+        ctx.beginPath();
+        ctx.arc(spot.x, spot.y, hot ? dotR * 1.45 : dotR, 0, Math.PI * 2);
+        ctx.fillStyle = hot ? COLOR_MONITOR_TEXT : "#d8ffe4";
+        ctx.fill();
+        if (!labeled) continue;
+        const labelAt = dialPoint(parts, deg, parts.r * 0.68);
+        ctx.fillStyle = COLOR_RADAR_YOU;
+        ctx.fillText(String(deg), labelAt.x, labelAt.y);
+      }
+      ctx.restore();
+    }
+
+    function dialMarkHit(parts, x, y) {
+      const reach = Math.max(9, Math.min(13, parts.r * 0.09));
+      let best = -1;
+      let bestDist = reach;
+      for (let deg = 0; deg < 360; deg += 45) {
+        const spot = dialPoint(parts, deg, parts.r * 0.9);
+        const dist = Math.hypot(x - spot.x, y - spot.y);
+        if (dist <= bestDist) {
+          bestDist = dist;
+          best = deg;
+        }
+      }
+      return best;
+    }
+
+    function drawDialHover(parts, player) {
+      if (typeof player.dialAim !== "number") return;
+      const rad = wrapAngle(player.dialAim) * Math.PI / 180;
+      const nx = Math.cos(rad);
+      const ny = -Math.sin(rad);
+      ctx.save();
+      ctx.globalAlpha = 0.4;
+      ctx.strokeStyle = COLOR_MONITOR_TEXT;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(parts.cx, parts.cy);
+      ctx.lineTo(parts.cx + nx * parts.r * 0.92, parts.cy + ny * parts.r * 0.92);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = COLOR_MONITOR_TEXT;
+      ctx.font = "12px monospace";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "bottom";
+      const label = angleText(player.dialAim);
+      const textW = ctx.measureText(label).width;
+      let lx = player.pointX + 10;
+      let ly = player.pointY - 8;
+      const right = parts.box.x + parts.box.width - 4;
+      const left = parts.box.x + 4;
+      const top = parts.box.y + 14;
+      const bottom = parts.box.y + parts.box.height - 4;
+      if (lx + textW > right) lx = player.pointX - textW - 10;
+      if (lx < left) lx = left;
+      if (ly < top) ly = player.pointY + 16;
+      if (ly > bottom) ly = bottom;
+      ctx.fillText(label, lx, ly);
+      ctx.restore();
+    }
+
     function drawTurretDial(box, player, withButtons) {
       const parts = turretDialParts(box, withButtons);
       ctx.save();
+      drawPanelOutline(box);
       ctx.beginPath();
       ctx.arc(parts.cx, parts.cy, parts.r, 0, Math.PI * 2);
       ctx.fillStyle = "#06140c";
@@ -2542,6 +2511,7 @@
         ctx.lineTo(parts.cx + Math.cos(rad) * outer, parts.cy - Math.sin(rad) * outer);
         ctx.stroke();
       }
+      drawDialMarks(parts, withButtons, player.dialHover);
 
       const color = player === player1 ? COLOR_P1 : COLOR_P2;
       if (player.turretBusy) drawTurretNeedle(parts, player.targetAngle, color, 0.32, 0.5, 0.8);
@@ -2550,6 +2520,7 @@
       ctx.arc(parts.cx, parts.cy, Math.max(2.5, parts.r * 0.09), 0, Math.PI * 2);
       ctx.fillStyle = color;
       ctx.fill();
+      if (withButtons) drawDialHover(parts, player);
 
       const readout = turretLabel(player);
       let fontPx = Math.max(10, Math.min(16, Math.floor(parts.label.height * 0.7)));
@@ -2611,6 +2582,8 @@
       const tipY = player.pointY;
       if (parts.ccw && pointInRect(tipX, tipY, parts.ccw)) return "ccw";
       if (parts.cw && pointInRect(tipX, tipY, parts.cw)) return "cw";
+      const mark = dialMarkHit(parts, tipX, tipY);
+      if (mark >= 0) return "mark:" + mark;
       if (Math.hypot(tipX - parts.cx, tipY - parts.cy) <= parts.r + 4) return "face";
       return "";
     }
@@ -2791,8 +2764,7 @@
       if (innerW - sideW - gap < 88) sideW = Math.max(52, innerW - gap - 88);
       const leftW = Math.max(40, innerW - sideW - gap);
       const eqH = Math.max(20, Math.min(28, innerH * 0.15));
-      const noteH = 14;
-      const graphY = innerY + eqH + noteH + 4;
+      const graphY = innerY + eqH + 4;
       const graphH = Math.max(16, innerY + innerH - graphY);
       const stackGap = 5;
       let dialH = Math.min(sideW + 8, Math.max(44, (innerH - stackGap) * 0.52));
@@ -2808,7 +2780,6 @@
         innerW: innerW,
         innerBottom: innerBottom,
         eqH: eqH,
-        noteH: noteH,
         fire: { x: innerX, y: innerY, width: leftW, height: innerH },
         graph: { x: innerX, y: graphY, w: leftW, h: graphH },
         dial: { x: sideX, y: innerY, width: sideW, height: dialH },
@@ -2850,16 +2821,6 @@
         return;
       }
       drawEquationField({ x: body.fire.x, y: body.innerY, width: body.fire.width, height: body.eqH }, player, "12px monospace", false);
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(body.fire.x, body.innerY + body.eqH, body.fire.width, body.noteH + 4);
-      ctx.clip();
-      ctx.font = "10px monospace";
-      ctx.textAlign = "left";
-      ctx.textBaseline = "middle";
-      ctx.fillStyle = player.canFire ? COLOR_MONITOR_TEXT : COLOR_MONITOR_WARNING;
-      ctx.fillText(stationFireNote(player), body.fire.x + 4, body.innerY + body.eqH + body.noteH / 2 + 2);
-      ctx.restore();
 
       if (body.graph.h > 20 && body.graph.w > 20) {
         drawShellGraph(body.graph, player.equationTree, player.flight);
@@ -3623,6 +3584,11 @@
         if (dialHit === "ccw" || dialHit === "cw") {
           player.dialDrag = false;
           nudgeTurret(player, dialHit === "ccw" ? -1 : 1);
+          return;
+        }
+        if (dialHit.indexOf("mark:") === 0) {
+          player.dialDrag = false;
+          setTurretAngle(player, Number(dialHit.slice(5)));
           return;
         }
         if (dialHit === "face") {
