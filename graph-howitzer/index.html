@@ -31,84 +31,78 @@
     // Drawn hand. The hitbox is a square around the palm center. Fingers may stick out.
     const PALM_RADIUS = 13;
     const HAND_HITBOX_HALF = PALM_RADIUS;
-    // Pixel cursors, shared by both players. 0 empty, 1 black outline, 2 white, 3 player cuff.
-    // Both players face the same way. The cell size keeps each pose near the old palm's size.
+    // Compact pixel cursors. 0 empty, 1 black outline, 2 fill.
+    // Fingers share that outline, so nothing transparent sits between them.
+    // A white halo is drawn around the outline. Both players face the same way.
     const HAND_CELL = 2;
     const HAND_OUTLINE = "#000000";
-    const HAND_FILL = "#ffffff";
+    const HAND_HALO = "#ffffff";
     const POINT_PRESS_DOWN_SECONDS = 0.12;
     const POINT_PRESS_UP_SECONDS = 0.12;
     const POINT_PRESS_SCALE = 0.86;
     const POINT_PRESS_SHIFT = 5; // pixels the pointing hand drops during a tap
     // Pointer hotspot is the index fingertip. Open and grab hotspots are the palm center.
     const POINTER_HAND = {
-      hotCol: 5,
+      hotCol: 4,
       hotRow: 0,
       rows: [
-        "0000010000000000",
-        "0000121000000000",
-        "0000121000000000",
-        "0000121000000000",
-        "0000121000000000",
-        "0000121000000000",
-        "0000121110000000",
-        "0000121210000000",
-        "0000121211100000",
-        "0000121212100000",
-        "0111121212111000",
-        "1211121212121000",
-        "1221121212121000",
-        "0122222222221000",
-        "0122222222221000",
+        "0001110000000000",
+        "0001210000000000",
+        "0001210000000000",
+        "0001210000000000",
+        "0001211100000000",
+        "0001212111000000",
+        "0001212121110000",
+        "0001212121210000",
+        "0001212121210000",
+        "0111212121211100",
+        "0122222222222100",
+        "0122222222222100",
         "0012222222221000",
         "0001222222210000",
         "0000122222100000",
-        "0000133333100000",
         "0000011111000000"
       ]
     };
     const OPEN_HAND = {
-      hotCol: 10,
-      hotRow: 11,
-      tipCol: 5,
+      hotCol: 8,
+      hotRow: 9,
+      tipCol: 4,
       tipRow: 0,
       rows: [
-        "00001110111011101110",
-        "00001210121012101210",
-        "00001210121012101210",
-        "00001210121012101210",
-        "00001210121012101210",
-        "00001210121012101210",
-        "11001210121012101210",
-        "12101210121012101210",
-        "12101210121012101211",
-        "12211222222222222211",
-        "01222222222222222221",
-        "00122222222222222210",
-        "00012222222222222100",
-        "00001222222222221000",
-        "00000122222222210000",
-        "00000013333333100000",
-        "00000001111111000000"
+        "0001111111110000",
+        "0001212121210000",
+        "0001212121210000",
+        "0001212121210000",
+        "0001212121210000",
+        "0001222222210000",
+        "0012222222221000",
+        "0112222222221100",
+        "0122222222222100",
+        "1122222222222210",
+        "0122222222222100",
+        "0012222222221000",
+        "0001222222210000",
+        "0000122222100000",
+        "0000011111000000"
       ]
     };
     const GRAB_HAND = {
-      hotCol: 9,
+      hotCol: 7,
       hotRow: 6,
       rows: [
-        "00111011101110111000",
-        "00121012101210121000",
-        "00121012101210121000",
-        "00121112111211121100",
-        "01122222222222222110",
-        "11222222222222222210",
-        "12222222222222222210",
-        "12222222222222222210",
-        "01222222222222222100",
-        "00122222222222221000",
-        "00012222222222210000",
-        "00001333333333100000",
-        "00000111111111000000"
+        "0001111111110000",
+        "0001212121210000",
+        "0012222222221000",
+        "0112222222221100",
+        "0122222222222100",
+        "1122222222222210",
+        "1222222222222210",
+        "0122222222222100",
+        "0012222222221000",
+        "0001222222210000",
+        "0000122222100000",
+        "0000011111000000"
       ]
     };
     const INTERACT_KEY_P1 = "e";
@@ -619,28 +613,80 @@
       player2WasMoving = moved2;
     }
 
+    // A light pastel of the player's color, so the two hands stay easy to tell apart.
+    function handFill(hex) {
+      const n = parseInt(hex.slice(1), 16);
+      const mix = function (channel) {
+        return Math.round(channel + (255 - channel) * 0.62);
+      };
+      const r = mix((n >> 16) & 255);
+      const g = mix((n >> 8) & 255);
+      const b = mix(n & 255);
+      return "rgb(" + r + "," + g + "," + b + ")";
+    }
+
+    function handPixel(rows, x, y) {
+      if (y < 0 || x < 0 || y >= rows.length || x >= rows[0].length) return "0";
+      return rows[y].charAt(x);
+    }
+
+    // One scratch sprite, redrawn for each hand. Nearest-neighbor keeps the tap crisp.
+    let handSprite = null;
+    let handSpriteCtx = null;
+
     // Crisp squares. The hotspot cell sits on hotX, hotY. scale is 1 except during a tap.
     function drawPixelHand(hotX, hotY, pose, color, scale) {
       const cell = HAND_CELL;
       const rows = pose.rows;
-      const originX = hotX - (pose.hotCol + 0.5) * cell;
-      const originY = hotY - (pose.hotRow + 0.5) * cell;
-      ctx.save();
-      ctx.imageSmoothingEnabled = false;
-      ctx.translate(hotX, hotY);
-      ctx.scale(scale, scale);
-      ctx.translate(-hotX, -hotY);
+      const cols = rows[0].length;
+      const pad = 1;
+      const bw = (cols + pad * 2) * cell;
+      const bh = (rows.length + pad * 2) * cell;
+      if (!handSprite || handSprite.width !== bw || handSprite.height !== bh) {
+        handSprite = document.createElement("canvas");
+        handSprite.width = bw;
+        handSprite.height = bh;
+        handSpriteCtx = handSprite.getContext("2d");
+      }
+      const sctx = handSpriteCtx;
+      sctx.clearRect(0, 0, bw, bh);
+      sctx.fillStyle = HAND_HALO;
+      for (let y = -1; y <= rows.length; y++) {
+        for (let x = -1; x <= cols; x++) {
+          if (handPixel(rows, x, y) !== "0") continue;
+          let touch = false;
+          for (let dy = -1; dy <= 1 && !touch; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              const near = handPixel(rows, x + dx, y + dy);
+              if (near === "1" || near === "2") touch = true;
+            }
+          }
+          if (touch) sctx.fillRect((x + pad) * cell, (y + pad) * cell, cell, cell);
+        }
+      }
+      const fill = handFill(color);
       for (let y = 0; y < rows.length; y++) {
         const row = rows[y];
         for (let x = 0; x < row.length; x++) {
           const pixel = row.charAt(x);
           if (pixel === "0") continue;
-          if (pixel === "1") ctx.fillStyle = HAND_OUTLINE;
-          else if (pixel === "3") ctx.fillStyle = color;
-          else ctx.fillStyle = HAND_FILL;
-          ctx.fillRect(originX + x * cell, originY + y * cell, cell, cell);
+          sctx.fillStyle = pixel === "1" ? HAND_OUTLINE : fill;
+          sctx.fillRect((x + pad) * cell, (y + pad) * cell, cell, cell);
         }
       }
+      const hotPx = (pose.hotCol + pad + 0.5) * cell;
+      const hotPy = (pose.hotRow + pad + 0.5) * cell;
+      let dx = hotX - hotPx * scale;
+      let dy = hotY - hotPy * scale;
+      const dw = bw * scale;
+      const dh = bh * scale;
+      if (scale === 1) {
+        dx = Math.round(dx);
+        dy = Math.round(dy);
+      }
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(handSprite, dx, dy, dw, dh);
       ctx.restore();
     }
 
@@ -674,10 +720,11 @@
       const cell = HAND_CELL;
       const cols = POINTER_HAND.rows[0].length;
       const rows = POINTER_HAND.rows.length;
-      let minX = room.left + POINTER_HAND.hotCol * cell;
-      let maxX = room.right - (cols - 1 - POINTER_HAND.hotCol) * cell;
-      let minY = POINTER_HAND.hotRow * cell;
-      let maxY = canvas.height - (rows - 1 - POINTER_HAND.hotRow) * cell;
+      // The hotspot is the center of its cell, and the halo sticks out one cell.
+      let minX = room.left + (POINTER_HAND.hotCol + 1.5) * cell;
+      let maxX = room.right - (cols - POINTER_HAND.hotCol + 0.5) * cell;
+      let minY = (POINTER_HAND.hotRow + 1.5) * cell;
+      let maxY = canvas.height - (rows - POINTER_HAND.hotRow + 0.5) * cell;
       if (minX > maxX) player.pointX = (room.left + room.right) / 2;
       else player.pointX = clampNumber(player.pointX, minX, maxX);
       if (minY > maxY) player.pointY = canvas.height / 2;
