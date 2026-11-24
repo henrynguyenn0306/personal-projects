@@ -1,17 +1,47 @@
 // One trajectory for the fire station and the battlefield.
-// Samples along the shot, then bisects the first return to height 0.
-// No eval or Function is used. The caller supplies the height at a distance.
+// The line runs across the whole range, including below the ground.
+// The impact is the first return to height 0. No eval or Function is used.
 (function (root) {
   var SAMPLE_STEP = 0.1;
-  var MAX_METERS = 100;
+  var MAX_DISTANCE = 240;
+  var MAX_ABS_HEIGHT = 200;
+
+  function inBand(y, limit) {
+    return isFinite(y) && Math.abs(y) <= limit;
+  }
+
+  // One end is inside the height band and the other has left it.
+  // Returns the point on the boundary between them.
+  function clipToBand(evalAt, xIn, yIn, xOut, yOut, limit) {
+    for (var k = 0; k < 52; k++) {
+      var mid = (xIn + xOut) / 2;
+      var yMid = evalAt(mid);
+      if (inBand(yMid, limit)) {
+        xIn = mid;
+        yIn = yMid;
+      } else {
+        xOut = mid;
+        yOut = yMid;
+      }
+    }
+    if (isFinite(yIn) && isFinite(yOut) && Math.abs(yOut) > limit && yOut !== yIn) {
+      var target = (yOut > 0 ? 1 : -1) * limit;
+      var t = (target - yIn) / (yOut - yIn);
+      if (t < 0) t = 0;
+      if (t > 1) t = 1;
+      return { x: xIn + (xOut - xIn) * t, y: target };
+    }
+    return { x: xIn, y: yIn };
+  }
 
   function bisectRoot(evalAt, lo, yLo, hi, yHi) {
-    // lo is still above the ground, hi is on or below it.
     for (var k = 0; k < 52; k++) {
       var mid = (lo + hi) / 2;
       var yMid = evalAt(mid);
       if (!isFinite(yMid)) return null;
-      if (yMid > 0) {
+      if (yMid === 0) return mid;
+      var same = (yLo > 0 && yMid > 0) || (yLo < 0 && yMid < 0);
+      if (same) {
         lo = mid;
         yLo = yMid;
       } else {
@@ -45,94 +75,178 @@
     return { x: xPeak, y: yPeak };
   }
 
-  function insertPeak(points, peakX, peakY) {
-    if (!(peakX > 0)) return;
+  function insertPoint(points, x, y) {
     for (var i = 0; i < points.length; i++) {
-      if (Math.abs(points[i].x - peakX) < 1e-6) {
-        if (peakY > points[i].y) points[i].y = peakY;
+      if (Math.abs(points[i].x - x) < 1e-4) {
+        points[i].y = y;
         return;
       }
-      if (points[i].x > peakX) {
-        points.splice(i, 0, { x: peakX, y: peakY });
+      if (points[i].x > x) {
+        points.splice(i, 0, { x: x, y: y });
         return;
       }
     }
+    points.push({ x: x, y: y });
   }
 
-  // Height samples from distance 0 to the impact, or to maxDistance when the
-  // shot never comes back to the ground. The last point of an impact is exactly
-  // (distance, 0). points are spaced by sampleStep, with the peak inserted.
+  // Above-ground runs and below-ground runs. A shared point sits on y = 0.
+  function splitGround(points) {
+    var above = [];
+    var below = [];
+    function add(runs, point, fresh) {
+      if (fresh || !runs.length) runs.push([point]);
+      else runs[runs.length - 1].push(point);
+    }
+    for (var i = 0; i < points.length; i++) {
+      var p = points[i];
+      var under = p.y < -1e-4;
+      if (i === 0) {
+        add(under ? below : above, p, true);
+        continue;
+      }
+      var q = points[i - 1];
+      var qUnder = q.y < -1e-4;
+      if (qUnder === under) {
+        add(under ? below : above, p, false);
+        continue;
+      }
+      var denom = q.y - p.y;
+      var t = denom === 0 ? 0 : q.y / denom;
+      if (t < 0) t = 0;
+      if (t > 1) t = 1;
+      var z = { x: q.x + (p.x - q.x) * t, y: 0 };
+      add(qUnder ? below : above, z, false);
+      add(under ? below : above, z, true);
+      add(under ? below : above, p, false);
+    }
+    return { above: above, below: below };
+  }
+
+  // Samples from 0 out to maxDistance. Stops cleanly where |height| leaves the
+  // band or the value stops being finite. The first return to height 0 is the impact.
   function traceShell(evalAt, options) {
-    var maxDistance = options && options.maxDistance > 0 ? options.maxDistance : MAX_METERS;
+    var maxDistance = options && options.maxDistance > 0 ? options.maxDistance : MAX_DISTANCE;
+    var maxAbs = options && options.maxAbsHeight > 0 ? options.maxAbsHeight : MAX_ABS_HEIGHT;
     var step = options && options.sampleStep > 0 ? options.sampleStep : SAMPLE_STEP;
     var speed = options && options.shellSpeed > 0 ? options.shellSpeed : 20;
-    var y0 = evalAt(0);
-    if (!isFinite(y0)) return null;
+    if (!(maxDistance > 0) || !(step > 0)) return null;
 
-    var peak = y0;
-    var peakX = 0;
-    var leftGround = y0 > 0.02;
-    var prevX = 0;
-    var prevY = y0;
-    var arc = 0;
-    var impactX = null;
     var steps = Math.ceil(maxDistance / step);
+    var points = [];
+    var prevX = 0;
+    var prevY = evalAt(0);
+    var i = 0;
+    var started = false;
 
-    for (var i = 1; i <= steps; i++) {
-      var x = Math.min(maxDistance, i * step);
-      if (x <= prevX + 1e-9) break;
-      var y = evalAt(x);
-      if (!isFinite(y)) return null;
-      if (y > peak) {
-        peak = y;
-        peakX = x;
+    if (inBand(prevY, maxAbs)) {
+      points.push({ x: 0, y: prevY });
+      started = true;
+    } else {
+      for (i = 1; i <= steps; i++) {
+        var x = Math.min(maxDistance, i * step);
+        var y = evalAt(x);
+        if (inBand(y, maxAbs)) {
+          var entry = clipToBand(evalAt, x, y, prevX, prevY, maxAbs);
+          points.push(entry);
+          if (x > entry.x + 1e-4) points.push({ x: x, y: y });
+          prevX = x;
+          prevY = y;
+          started = true;
+          break;
+        }
+        prevX = x;
+        prevY = y;
       }
-      if (y > 0.02) leftGround = true;
-      if (leftGround && y <= 0) {
-        impactX = bisectRoot(evalAt, prevX, prevY, x, y);
-        if (impactX === null || !isFinite(impactX)) return null;
-        arc += Math.hypot(impactX - prevX, -prevY);
-        break;
-      }
-      arc += Math.hypot(x - prevX, y - prevY);
-      prevX = x;
-      prevY = y;
+      if (!started) return null;
     }
 
-    var end = impactX === null ? maxDistance : impactX;
+    var leftGround = Math.abs(points[0].y) > 0.02;
+    var impactX = null;
+    var arcHit = 0;
+    var arcAll = 0;
+
+    function consider(x0, y0, x1, y1) {
+      var seg = Math.hypot(x1 - x0, y1 - y0);
+      if (impactX === null) {
+        var crosses = (y0 > 0 && y1 <= 0) || (y0 < 0 && y1 >= 0);
+        if (leftGround && crosses && x1 > x0 + 1e-9) {
+          var root = bisectRoot(evalAt, x0, y0, x1, y1);
+          if (root !== null && isFinite(root)) {
+            impactX = root;
+            arcHit += Math.hypot(root - x0, -y0);
+          } else {
+            arcHit += seg;
+          }
+        } else {
+          arcHit += seg;
+        }
+      }
+      arcAll += seg;
+      if (Math.abs(y1) > 0.02) leftGround = true;
+    }
+
+    for (var p = 1; p < points.length; p++) {
+      consider(points[p - 1].x, points[p - 1].y, points[p].x, points[p].y);
+    }
+
+    for (i = i + 1; i <= steps; i++) {
+      var nx = Math.min(maxDistance, i * step);
+      if (nx <= prevX + 1e-9) break;
+      var ny = evalAt(nx);
+      if (!inBand(ny, maxAbs)) {
+        var edge = clipToBand(evalAt, prevX, prevY, nx, ny, maxAbs);
+        if (edge.x > prevX + 1e-6) {
+          points.push(edge);
+          consider(prevX, prevY, edge.x, edge.y);
+        }
+        break;
+      }
+      points.push({ x: nx, y: ny });
+      consider(prevX, prevY, nx, ny);
+      prevX = nx;
+      prevY = ny;
+    }
+
+    if (!points.length) return null;
+
+    var peak = points[0].y;
+    var peakX = points[0].x;
+    var limit = impactX === null ? Infinity : impactX + 1e-6;
+    for (var k = 0; k < points.length; k++) {
+      if (points[k].x > limit) break;
+      if (points[k].y > peak) {
+        peak = points[k].y;
+        peakX = points[k].x;
+      }
+    }
+    var end = impactX === null ? points[points.length - 1].x : impactX;
     var refined = refinePeak(evalAt, peakX, peak, step, end);
     peakX = refined.x;
     peak = refined.y;
+    if (impactX !== null) insertPoint(points, impactX, 0);
+    if (peakX > 0 && (impactX === null || peakX <= impactX + 1e-4)) insertPoint(points, peakX, peak);
 
-    var points = [];
-    var count = Math.ceil(end / step);
-    for (var j = 0; j <= count; j++) {
-      var sx = j * step;
-      if (sx >= end - 1e-7) break;
-      var sy = evalAt(sx);
-      if (!isFinite(sy)) return null;
-      points.push({ x: sx, y: sy });
+    var high = 0;
+    for (var h = 0; h < points.length; h++) {
+      if (points[h].y > high) high = points[h].y;
     }
-    if (impactX !== null) points.push({ x: impactX, y: 0 });
-    else {
-      var yEnd = evalAt(end);
-      if (!isFinite(yEnd)) return null;
-      points.push({ x: end, y: yEnd });
-    }
-    insertPeak(points, peakX, peak);
 
     return {
       impact: impactX !== null,
       distance: impactX,
       peak: peak,
       peakX: peakX,
-      time: arc / speed,
-      points: points
+      time: (impactX !== null ? arcHit : arcAll) / speed,
+      points: points,
+      high: high
     };
   }
 
   root.GraphHowitzerFire = {
     traceShell: traceShell,
-    SAMPLE_STEP: SAMPLE_STEP
+    splitGround: splitGround,
+    SAMPLE_STEP: SAMPLE_STEP,
+    MAX_DISTANCE: MAX_DISTANCE,
+    MAX_ABS_HEIGHT: MAX_ABS_HEIGHT
   };
 })(typeof globalThis !== "undefined" ? globalThis : this);

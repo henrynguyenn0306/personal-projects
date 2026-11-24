@@ -206,7 +206,12 @@
     function buildGround(halfW, halfH) {
       const ground = new THREE.Mesh(
         new THREE.PlaneGeometry(halfW * 2, halfH * 2),
-        new THREE.MeshLambertMaterial({ color: COLOR_GROUND })
+        new THREE.MeshLambertMaterial({
+          color: COLOR_GROUND,
+          transparent: true,
+          opacity: 0.62,
+          depthWrite: false
+        })
       );
       ground.rotation.x = -Math.PI / 2;
       scene.add(ground);
@@ -435,8 +440,6 @@
     }
 
     // Same safe parser as the fire station. No eval or Function is used.
-    const ARC_MAX_METERS = 100;
-
     function tokenizeEquation(input) {
       const tokens = [];
       let i = 0;
@@ -643,15 +646,11 @@
       return NaN;
     }
 
-    // Same trace as the fire station: bisected impact, samples every 0.1 m.
+    // Same trace as the fire station, including the part below the ground.
     function firingCurve(tree) {
       return GraphHowitzerFire.traceShell(function (x) {
         return evalExpr(tree, x);
-      }, {
-        maxDistance: ARC_MAX_METERS,
-        sampleStep: GraphHowitzerFire.SAMPLE_STEP,
-        shellSpeed: 20
-      });
+      }, { shellSpeed: 20 });
     }
 
     // Stick or velocity when the game has one. Otherwise the middle of the field.
@@ -709,6 +708,20 @@
       return group;
     }
 
+    function addWorldRuns(group, player, aim, runs, material, dashed) {
+      for (let r = 0; r < runs.length; r++) {
+        const run = runs[r];
+        if (run.length < 2) continue;
+        const vectors = [];
+        for (let i = 0; i < run.length; i++) {
+          vectors.push(arcWorld(player, aim, run[i].x, run[i].y));
+        }
+        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(vectors), material);
+        if (dashed) line.computeLineDistances();
+        group.add(line);
+      }
+    }
+
     function buildArc(player, color) {
       const tree = parseExpression(player.equation);
       if (!tree) return null;
@@ -716,20 +729,26 @@
       if (!curve || curve.points.length < 2) return null;
       const aim = aimOf(player);
       const group = new THREE.Group();
-      const vectors = [];
-      for (let i = 0; i < curve.points.length; i++) {
-        const point = curve.points[i];
-        vectors.push(arcWorld(player, aim, point.x, point.y));
-      }
-      const geometry = new THREE.BufferGeometry().setFromPoints(vectors);
-      // Bias the line toward the camera so the tip is not hidden in the ground plane.
-      group.add(new THREE.Line(geometry, new THREE.LineBasicMaterial({
+      const runs = GraphHowitzerFire.splitGround(curve.points);
+      const solid = new THREE.LineBasicMaterial({
         color: color,
         polygonOffset: true,
         polygonOffsetFactor: -4,
         polygonOffsetUnits: -4
-      })));
-      group.userData.peak = curve.peak || 0;
+      });
+      const dashed = new THREE.LineDashedMaterial({
+        color: color,
+        transparent: true,
+        opacity: 0.5,
+        dashSize: 1.8,
+        gapSize: 1.1,
+        polygonOffset: true,
+        polygonOffsetFactor: -4,
+        polygonOffsetUnits: -4
+      });
+      addWorldRuns(group, player, aim, runs.above, solid, false);
+      addWorldRuns(group, player, aim, runs.below, dashed, true);
+      group.userData.peak = curve.high || 0;
       if (curve.impact && curve.distance !== null) {
         const impactAt = arcWorld(player, aim, curve.distance, 0);
         group.add(makeGroundX(color, impactAt));
