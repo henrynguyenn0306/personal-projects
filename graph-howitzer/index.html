@@ -45,15 +45,16 @@
     const HOLD_FINGER_RADIUS_RATIO = 0.7;
     const HOLD_FINGER_PULL = 0.8;
     // Pointing pose, used only while that player's zoom window is open.
-    // Classic pixel link-hand. 0 empty, 1 black outline, 2 white, 3 the player's cuff.
-    // The hotspot is the tip of the index finger.
+    // Pixel link-hand shape. 0 is empty. Every other cell is the player's flat color.
+    // The hotspot is the index tip. The cursor is as tall as the open hand.
     const POINT_PRESS_DOWN_SECONDS = 0.12;
     const POINT_PRESS_UP_SECONDS = 0.12;
-    const POINT_PRESS_SCALE = 0.86; // one cell smaller at the bottom of the tap, so pixels stay crisp
+    const POINT_PRESS_SCALE = 0.86;
     const POINT_PRESS_SHIFT = 5; // pixels the hand drops during the press
-    const POINT_HAND_CELL = 3;
     const POINT_HOT_COL = 5;
     const POINT_HOT_ROW = 0;
+    // Top of the open hand's tallest finger, measured from the palm center.
+    const HAND_TIP_OFFSET_Y = -(PALM_RADIUS * 1.12 + FINGER_RADIUS);
     const POINT_HAND_BITMAP = [
       "0000010000000000",
       "0000121000000000",
@@ -88,8 +89,7 @@
     const BATTLEFIELD_CHANNEL_NAME = "graph-howitzer";
     const ZOOM_WIDTH_RATIO = 0.85;
     const ZOOM_HEIGHT_RATIO = 0.7;
-    const ZOOM_FONT_SIZE = 28;
-    const ZOOM_LINE_HEIGHT = 36;
+    const MONITOR_FONT_SIZE = 16;
     const CLOSE_BUTTON_SIZE = 28;
     const COLOR_ROOM_DIM = "rgba(0, 0, 0, 0.55)";
     const COLOR_ROOM_1 = "#1a2230";
@@ -617,9 +617,27 @@
       return linear * linear * (3 - 2 * linear);
     }
 
+    // How tall the open hand is, from the highest fingertip to the bottom of the palm.
+    function openHandHeight() {
+      let top = -PALM_RADIUS;
+      let bottom = PALM_RADIUS;
+      for (let i = 0; i < FINGER_SPOTS.length; i++) {
+        const spot = FINGER_SPOTS[i];
+        if (spot.y - spot.r < top) top = spot.y - spot.r;
+        if (spot.y + spot.r > bottom) bottom = spot.y + spot.r;
+      }
+      return bottom - top;
+    }
+
+    // One bitmap cell. The whole cursor is as tall as the open hand, then shrinks on a tap.
+    function pointingCell(press) {
+      const cell = openHandHeight() / POINT_HAND_BITMAP.length;
+      return cell * (1 - (1 - POINT_PRESS_SCALE) * press);
+    }
+
     // Keep the whole cursor inside this player's half. The hotspot is the fingertip.
     function clampPointingHand(player, room) {
-      const cell = POINT_HAND_CELL;
+      const cell = pointingCell(0);
       const cols = POINT_HAND_BITMAP[0].length;
       const rows = POINT_HAND_BITMAP.length;
       let minX = room.left + POINT_HOT_COL * cell;
@@ -632,17 +650,25 @@
       else player.pointY = clampNumber(player.pointY, minY, maxY);
     }
 
+    // Palm center for an open hand whose tallest fingertip is the pointing hotspot.
+    function parkHandUnderTip(player, room) {
+      player.x = player.pointX;
+      player.y = player.pointY - HAND_TIP_OFFSET_Y;
+      clampHand(player, room);
+    }
+
     // The fingertip moves with the direction keys, at the same speed as the room hand.
     function updatePointingHand(player, room, dir, dt) {
       if (!player.panelOpen) {
+        if (player.pointReady) parkHandUnderTip(player, room);
         player.pointReady = false;
         player.pointPressFrom = -1;
         return;
       }
       if (!player.pointReady) {
-        const panel = getZoomRect(room);
-        player.pointX = panel.x + panel.width / 2;
-        player.pointY = panel.y + panel.height / 2;
+        // Start on the fingertip the open hand already had, so the pose change does not jump.
+        player.pointX = player.x;
+        player.pointY = player.y + HAND_TIP_OFFSET_Y;
         player.pointReady = true;
       }
       player.pointX += dir.x * HAND_SPEED * dt;
@@ -651,26 +677,22 @@
       if (player.panelKind === "fire") player.fireIndex = keyUnderPoint(player, room);
     }
 
-    // White palm, black steps, and a short cuff in this player's color.
+    // Pixel pointing pose, filled and shaded like the open hand.
     function drawPointingHand(hand, color) {
       if (!hand.pointReady) return;
       const press = pointPressAmount(hand);
-      // One whole cell smaller while the finger is down, so the outline stays on the pixel grid.
-      const cell = press > (1 - POINT_PRESS_SCALE) ? POINT_HAND_CELL - 1 : POINT_HAND_CELL;
+      const cell = pointingCell(press);
       const tipX = hand.pointX;
       const tipY = hand.pointY + POINT_PRESS_SHIFT * press;
-      const originX = Math.round(tipX - (POINT_HOT_COL + 0.5) * cell);
-      const originY = Math.round(tipY - (POINT_HOT_ROW + 0.5) * cell);
+      const originX = tipX - (POINT_HOT_COL + 0.5) * cell;
+      const originY = tipY - (POINT_HOT_ROW + 0.5) * cell;
       ctx.save();
       ctx.imageSmoothingEnabled = false;
+      ctx.fillStyle = color;
       for (let y = 0; y < POINT_HAND_BITMAP.length; y++) {
         const row = POINT_HAND_BITMAP[y];
         for (let x = 0; x < row.length; x++) {
-          const pixel = row.charAt(x);
-          if (pixel === "0") continue;
-          if (pixel === "1") ctx.fillStyle = "#000000";
-          else if (pixel === "3") ctx.fillStyle = color;
-          else ctx.fillStyle = "#ffffff";
+          if (row.charAt(x) === "0") continue;
           ctx.fillRect(originX + x * cell, originY + y * cell, cell, cell);
         }
       }
@@ -832,22 +854,24 @@
       };
     }
 
-    // Joystick group and fire control share the band under the monitor row.
-    // Three equal gaps: before the group, between the group and fire control, and after it.
-    // Each plate is centered in that band, so its top gap matches its bottom gap.
+    // Joystick group and fire control sit just under the monitor row.
+    // The gap matches the one between the monitor and the radar.
+    // Three equal gaps still run across the half: before the group, between the plates, and after fire control.
     function lowerControls(room, row) {
       const roomWidth = room.right - room.left;
       const rowBottom = row.monitor.y + Math.max(row.monitor.height, row.radar.height);
-      const freeHeight = Math.max(1, canvas.height - rowBottom);
+      const rowGap = row.radar.x - (row.monitor.x + row.monitor.width);
+      const top = rowBottom + rowGap;
+      const roomBelow = Math.max(1, canvas.height - top);
 
       let joySize = row.radar.width * JOYSTICK_SIZE_RATIO;
       let fuelW = FUEL_GAUGE_WIDTH;
       let fireW = FIRE_STATION_WIDTH;
       let fireH = FIRE_STATION_HEIGHT;
-      if (joySize > freeHeight) joySize = freeHeight;
-      if (fireH > freeHeight) {
-        fireW *= freeHeight / fireH;
-        fireH = freeHeight;
+      if (joySize > roomBelow) joySize = roomBelow;
+      if (fireH > roomBelow) {
+        fireW *= roomBelow / fireH;
+        fireH = roomBelow;
       }
       const natural = joySize + fuelW + fireW;
       if (natural > roomWidth && natural > 0) {
@@ -861,14 +885,14 @@
       return {
         joystick: {
           x: room.left + gap,
-          y: rowBottom + (freeHeight - joySize) / 2,
+          y: top,
           width: joySize,
           height: joySize
         },
         fuelWidth: fuelW,
         fire: {
           x: room.left + gap * 2 + joySize + fuelW,
-          y: rowBottom + (freeHeight - fireH) / 2,
+          y: top,
           width: fireW,
           height: fireH
         }
@@ -992,7 +1016,7 @@
       ctx.fillStyle = COLOR_MONITOR_SCREEN;
       ctx.fillRect(screenX, screenY, screenW, screenH);
 
-      drawMessageList(player, screenX, screenY, screenW, screenH, 16, MONITOR_LINE_HEIGHT);
+      drawMessageList(player, screenX, screenY, screenW, screenH, MONITOR_FONT_SIZE, MONITOR_LINE_HEIGHT);
       if (near && machineStarted) drawInteractOutline(rect);
     }
 
@@ -1325,7 +1349,7 @@
         Math.max(5, rect.width * 0.08)
       );
       ctx.restore();
-      if (near && machineStarted) drawInteractOutline(rect);
+      if (near && machineStarted) drawJoystickInteractOutline(rect);
     }
 
     function fuelOf(player) {
@@ -2042,16 +2066,31 @@
       drawFireKeys({ x: rightX, y: screenY, width: rightW, height: screenH }, player);
     }
 
-    // Soft pulse around the station the hand can use. The station itself does not brighten.
-    function drawInteractOutline(rect) {
+    function interactOutlineStyle() {
       const turns = frameTime / 1000 / INTERACT_PULSE_SECONDS;
       const wave = 0.5 + 0.5 * Math.sin(turns * Math.PI * 2);
       const pulse = 0.62 + 0.38 * wave;
-      const gap = INTERACT_OUTLINE_GAP;
-      ctx.save();
       ctx.strokeStyle = "rgba(180, 255, 214, " + pulse.toFixed(3) + ")";
       ctx.lineWidth = INTERACT_OUTLINE_WIDTH;
+    }
+
+    // Soft pulse around the station the hand can use. The station itself does not brighten.
+    function drawInteractOutline(rect) {
+      const gap = INTERACT_OUTLINE_GAP;
+      ctx.save();
+      interactOutlineStyle();
       ctx.strokeRect(rect.x - gap, rect.y - gap, rect.width + gap * 2, rect.height + gap * 2);
+      ctx.restore();
+    }
+
+    // The joystick's highlight follows the round well, a few pixels outside it, not the square plate.
+    function drawJoystickInteractOutline(rect) {
+      const wellR = rect.width * JOYSTICK_WELL_RATIO / 2;
+      ctx.save();
+      interactOutlineStyle();
+      ctx.beginPath();
+      ctx.arc(rect.x + rect.width / 2, rect.y + rect.height / 2, wellR + INTERACT_OUTLINE_GAP, 0, Math.PI * 2);
+      ctx.stroke();
       ctx.restore();
     }
 
@@ -2224,7 +2263,8 @@
     }
 
     // Rings at 5, 10, 15, and 20 m. The outer ring is the radar's range circle.
-    function drawRadarRangeRings(centerX, centerY, rangePx) {
+    // Meter labels are only drawn on the zoomed radar. The small console radar keeps the rings.
+    function drawRadarRangeRings(centerX, centerY, rangePx, showLabels) {
       const marks = [5, 10, 15, 20];
       const fontSize = rangePx > 90 ? 11 : 8;
       ctx.font = fontSize + "px monospace";
@@ -2237,6 +2277,7 @@
         ctx.beginPath();
         ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
         ctx.stroke();
+        if (!showLabels) continue;
         ctx.fillStyle = COLOR_RADAR_YOU;
         ctx.textAlign = meters === RADAR_RANGE ? "right" : "center";
         const labelX = meters === RADAR_RANGE ? centerX + radius - 2 : centerX + radius;
@@ -2339,7 +2380,7 @@
       if (!showBlips) drawRadarCrosshair(screenX, screenY, screenW, screenH, centerX, centerY);
       if (showBlips) drawRadarBlips(centerX, centerY, rangePx, ownerIndex);
       drawRadarSweep(centerX, centerY, rangePx);
-      drawRadarRangeRings(centerX, centerY, rangePx);
+      drawRadarRangeRings(centerX, centerY, rangePx, showBlips);
 
       ctx.fillStyle = COLOR_RADAR_YOU;
       ctx.beginPath();
@@ -2699,7 +2740,7 @@
       } else if (player.panelKind === "fire") {
         drawFireZoom(player, view);
       } else {
-        drawMessageList(player, screenX, screenY, screenW, screenH, ZOOM_FONT_SIZE, ZOOM_LINE_HEIGHT);
+        drawMessageList(player, screenX, screenY, screenW, screenH, MONITOR_FONT_SIZE, MONITOR_LINE_HEIGHT);
       }
 
       const button = closeButtonRect(panel);
