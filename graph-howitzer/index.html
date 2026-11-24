@@ -176,6 +176,10 @@
     const FIRE_DEFAULT_EQUATION = "-0.05x^2 + 2x";
     const EQUATION_PREFIX = "y = ";
     const SHELL_SPEED = 20; // m/s along the path, not along the ground
+    const SHELL_STORAGE_COUNT = 9;
+    const SHELL_CARRY_RATIO = 0.5; // a carried shell slows the room hand to half speed
+    const SHELL_RESTOCK_SECONDS = 60;
+    const SHELL_FALL_GRAVITY = 1600; // px/s squared; a dropped shell leaves the bottom quickly
     const FIRE_KEY_COLS = 12;
     // Three short rows across the zoom window. CLR and DONE are wider.
     // √( and the other calls insert the opening parenthesis.
@@ -243,8 +247,9 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "" };
-    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "" };
+    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "", shells: SHELL_STORAGE_COUNT, carryingShell: false, storageClosedAt: null, hatch: 0 };
+    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "", shells: SHELL_STORAGE_COUNT, carryingShell: false, storageClosedAt: null, hatch: 0 };
+    const fallingShells = [];
 
     // The wall sits in the middle. Each player owns one side of it.
     function getRooms() {
@@ -343,9 +348,15 @@
       return { x: dx / length, y: dy / length };
     }
 
+    function handMoveSpeed(hand) {
+      if (hand.carryingShell) return HAND_SPEED * SHELL_CARRY_RATIO;
+      return HAND_SPEED;
+    }
+
     function moveHand(hand, dir, dt, room) {
-      hand.x += dir.x * HAND_SPEED * dt;
-      hand.y += dir.y * HAND_SPEED * dt;
+      const speed = handMoveSpeed(hand);
+      hand.x += dir.x * speed * dt;
+      hand.y += dir.y * speed * dt;
       // Stations don't block the hand; only the middle wall does.
       clampHand(hand, room);
     }
@@ -594,6 +605,9 @@
       const moved2 = updateMachine(player2, 1, dt);
       if (player1.gripping) placeHandOnKnob(player1, rooms.left);
       if (player2.gripping) placeHandOnKnob(player2, rooms.right);
+      updateShellStorage(player1, dt);
+      updateShellStorage(player2, dt);
+      updateFallingShells(dt);
       if (moved1 || moved2) battlefieldDirty = true;
       // The last small step must be saved even if the throttle window has not ended.
       if ((player1WasMoving && !moved1) || (player2WasMoving && !moved2)) flushBattlefield(frameTime, true);
@@ -662,8 +676,9 @@
 
     // Open while the hand is free. Curled while it grips the stick or holds the start button.
     function drawHand(hand, color) {
-      const pose = (hand.gripping || hand.holdingStart) ? "hold" : "open";
+      const pose = (hand.gripping || hand.holdingStart || hand.carryingShell) ? "hold" : "open";
       drawHandShape(hand.x, hand.y, color, pose);
+      if (hand.carryingShell) drawShellGlyph(hand.x + 2, hand.y - 16, 42, -0.35);
     }
 
     // 0 at rest, 1 at the bottom of the press, then back to 0.
@@ -746,8 +761,9 @@
         player.pointY = player.y + tip.y;
         player.pointReady = true;
       }
-      player.pointX += dir.x * HAND_SPEED * dt;
-      player.pointY += dir.y * HAND_SPEED * dt;
+      const pointSpeed = handMoveSpeed(player);
+      player.pointX += dir.x * pointSpeed * dt;
+      player.pointY += dir.y * pointSpeed * dt;
       clampPointingHand(player, room);
       if (player.panelKind === "turret") {
         const hit = dialUnderPoint(player, room);
@@ -823,11 +839,14 @@
       drawRefuelStation(rooms.right, player2);
       drawFireStation(rooms.left, player1);
       drawFireStation(rooms.right, player2);
+      drawShellStorage(rooms.left, player1);
+      drawShellStorage(rooms.right, player2);
       drawStartButton();
 
       // Room hands sit on the stations. An open window gets its hand afterwards, on top.
       if (!player1.panelOpen) drawHand(player1, COLOR_P1);
       if (!player2.panelOpen) drawHand(player2, COLOR_P2);
+      drawFallingShells();
 
       // Zoom panels sit above the room, one per player.
       drawZoomPanel(rooms.left, player1);
@@ -960,6 +979,11 @@
         joy = Math.max(64, Math.min(maxH, inner - fuelW - 120));
         fireW = inner - joy - fuelW;
       }
+      const storageY = top + joy + rowGap;
+      let storageH = joy;
+      if (canvas.height - (storageY + storageH) < rowGap) {
+        storageH = Math.max(48, canvas.height - storageY - rowGap);
+      }
       return {
         joystick: {
           x: room.left + rowGap,
@@ -973,6 +997,14 @@
           y: top,
           width: fireW,
           height: joy
+        },
+        // Same left edge and width as the stick plus its fuel column. The floor to the
+        // right stays open for the loader.
+        storage: {
+          x: room.left + rowGap,
+          y: storageY,
+          width: joy + fuelW,
+          height: storageH
         }
       };
     }
@@ -995,7 +1027,8 @@
         radar: row.radar,
         joystick: lower.joystick,
         fuelWidth: lower.fuelWidth,
-        fire: lower.fire
+        fire: lower.fire,
+        storage: lower.storage
       };
     }
 
@@ -1049,6 +1082,10 @@
 
     function getFireRect(room) {
       return getStationLayout(room).fire;
+    }
+
+    function getStorageRect(room) {
+      return getStationLayout(room).storage;
     }
 
     // Square around the palm. Fingers are outside this box on purpose.
@@ -1533,6 +1570,166 @@
       ctx.fill();
       ctx.restore();
       if (near && machineStarted && usable) drawInteractOutline(rect);
+    }
+
+    // Side view of one shell. angle 0 points the nose to the right.
+    function drawShellGlyph(x, y, length, angle) {
+      const h = Math.max(6, length * 0.28);
+      const nose = length * 0.3;
+      const body = Math.max(8, length - nose);
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.fillStyle = "#d2b36a";
+      ctx.beginPath();
+      ctx.moveTo(-body / 2 + h / 2, -h / 2);
+      ctx.lineTo(body / 2 - 1, -h / 2);
+      ctx.lineTo(body / 2 - 1, h / 2);
+      ctx.lineTo(-body / 2 + h / 2, h / 2);
+      ctx.arc(-body / 2 + h / 2, 0, h / 2, Math.PI / 2, -Math.PI / 2, false);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "#6e4e28";
+      const band = Math.max(3, h * 0.28);
+      ctx.fillRect(body / 2 - band * 2.1, -h / 2, band, h);
+      ctx.fillStyle = "#8d7044";
+      ctx.beginPath();
+      ctx.moveTo(body / 2 - 1, -h * 0.46);
+      ctx.lineTo(body / 2 + nose, 0);
+      ctx.lineTo(body / 2 - 1, h * 0.46);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function storageWell(rect) {
+      const pad = 10;
+      return {
+        x: rect.x + pad,
+        y: rect.y + pad,
+        w: Math.max(8, rect.width - pad * 2),
+        h: Math.max(8, rect.height - pad - 26)
+      };
+    }
+
+    function drawStorageHatches(well, amount) {
+      const lip = Math.max(3, well.w * 0.04);
+      const doorW = lip + (well.w / 2 - lip) * amount;
+      ctx.fillStyle = "#4e4e58";
+      ctx.fillRect(well.x, well.y, doorW, well.h);
+      ctx.fillRect(well.x + well.w - doorW, well.y, doorW, well.h);
+      ctx.fillStyle = COLOR_JOYSTICK_EDGE_LIGHT;
+      ctx.fillRect(well.x, well.y, doorW, 2);
+      ctx.fillRect(well.x + well.w - doorW, well.y, doorW, 2);
+      ctx.fillStyle = COLOR_JOYSTICK_EDGE_DARK;
+      ctx.fillRect(well.x, well.y + well.h - 2, doorW, 2);
+      ctx.fillRect(well.x + well.w - doorW, well.y + well.h - 2, doorW, 2);
+      if (amount > 0.85) {
+        ctx.fillStyle = "#121216";
+        ctx.fillRect(well.x + well.w / 2 - 1, well.y + 3, 2, well.h - 6);
+      }
+    }
+
+    function drawShellStorage(room, player) {
+      const rect = getStorageRect(room);
+      const near = stationNearHand(player, room) === "storage";
+      const open = player.storageClosedAt == null;
+      const usable = machineStarted && open && player.shells > 0 && !player.carryingShell;
+      ctx.save();
+      drawBeveledRect(rect);
+      const boltR = Math.max(2, Math.min(3, rect.width * 0.03));
+      const inset = boltR + 4;
+      if (rect.width > inset * 2 + 8 && rect.height > inset * 2 + 8) {
+        drawBolt(rect.x + inset, rect.y + inset, boltR);
+        drawBolt(rect.x + rect.width - inset, rect.y + inset, boltR);
+        drawBolt(rect.x + inset, rect.y + rect.height - inset, boltR);
+        drawBolt(rect.x + rect.width - inset, rect.y + rect.height - inset, boltR);
+      }
+      const well = storageWell(rect);
+      ctx.fillStyle = machineStarted ? "#10140f" : "#000000";
+      ctx.fillRect(well.x, well.y, well.w, well.h);
+      if (machineStarted && player.shells > 0 && player.hatch < 0.98) {
+        const length = Math.max(18, Math.min(well.w * 0.62, well.h * 0.7));
+        const noseRight = player === player1;
+        drawShellGlyph(well.x + well.w / 2, well.y + well.h / 2, length, noseRight ? 0 : Math.PI);
+      }
+      drawStorageHatches(well, machineStarted ? player.hatch : 0);
+      ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
+      ctx.font = "bold 11px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("STORAGE", rect.x + rect.width / 2 - 8, rect.y + rect.height - 14);
+      let led = COLOR_JOYSTICK_LED_OFF;
+      if (machineStarted && open && player.shells > 0) led = COLOR_JOYSTICK_LED_ON;
+      else if (machineStarted && !open) led = COLOR_REFUEL_LED;
+      ctx.fillStyle = led;
+      ctx.beginPath();
+      ctx.arc(rect.x + rect.width - inset - 6, rect.y + rect.height - 14, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      if (near && usable) drawInteractOutline(rect);
+    }
+
+    function drawFallingShells() {
+      for (let i = 0; i < fallingShells.length; i++) {
+        const shell = fallingShells[i];
+        drawShellGlyph(shell.x, shell.y, 34, shell.rot);
+      }
+    }
+
+    // Hatches shut at empty and open again with a full stack. No countdown is drawn.
+    function updateShellStorage(player, dt) {
+      const want = player.storageClosedAt != null ? 1 : 0;
+      const step = dt / 0.35;
+      if (player.hatch < want) player.hatch = Math.min(1, player.hatch + step);
+      else if (player.hatch > want) player.hatch = Math.max(0, player.hatch - step);
+      if (!machineStarted || player.storageClosedAt == null) return;
+      if (frameTime - player.storageClosedAt < SHELL_RESTOCK_SECONDS * 1000) return;
+      player.shells = SHELL_STORAGE_COUNT;
+      player.storageClosedAt = null;
+      const closed = warningIndex(player, "storage-closed");
+      if (closed !== -1) player.messages.splice(closed, 1);
+      addStatusMessage(player, "> Storage: Restocked.");
+    }
+
+    function updateFallingShells(dt) {
+      for (let i = fallingShells.length - 1; i >= 0; i--) {
+        const shell = fallingShells[i];
+        shell.vy += SHELL_FALL_GRAVITY * dt;
+        shell.y += shell.vy * dt;
+        shell.rot += dt * 1.6;
+        if (shell.y > canvas.height + 40) fallingShells.splice(i, 1);
+      }
+    }
+
+    function takeShell(player) {
+      if (player.carryingShell) return;
+      if (player.storageClosedAt != null || player.shells <= 0) {
+        if (warningIndex(player, "storage-closed") === -1) {
+          addStatusMessage(player, { text: "> Storage: Hatches closed.", color: COLOR_MONITOR_TEXT, kind: "storage-closed" });
+        }
+        return;
+      }
+      player.shells -= 1;
+      player.carryingShell = true;
+      addStatusMessage(player, "> Storage: Shell taken.");
+      if (player.shells <= 0) {
+        player.shells = 0;
+        player.storageClosedAt = frameTime;
+        addStatusMessage(player, "> Storage: Empty. Hatches closed.");
+      }
+    }
+
+    function dropCarriedShell(player) {
+      if (!player.carryingShell) return;
+      player.carryingShell = false;
+      fallingShells.push({ x: player.x + 8, y: player.y - 2, vy: 80, rot: -0.6 });
+      addStatusMessage(player, "> Storage: Shell dropped. Lost.");
+    }
+
+    // The loader will accept a carried shell later. No station takes one yet.
+    function tryDepositShell(player, target) {
+      return false;
     }
 
     function closeZoom(player) {
@@ -3493,7 +3690,8 @@
         { kind: "refuel", rect: getRefuelRect(room) },
         { kind: "fire", rect: plate.fire },
         { kind: "turret", rect: plate.dial },
-        { kind: "map", rect: plate.map }
+        { kind: "map", rect: plate.map },
+        { kind: "storage", rect: getStorageRect(room) }
       ];
       let bestKind = "";
       let bestDist = 0;
@@ -3532,6 +3730,11 @@
         player.tiltY = 0;
         return;
       }
+      if (player.carryingShell) {
+        const deposit = stationNearHand(player, room);
+        if (!tryDepositShell(player, deposit)) dropCarriedShell(player);
+        return;
+      }
       if (player.panelOpen) {
         player.panelOpen = false;
         player.panelKind = "";
@@ -3549,6 +3752,10 @@
       if (kind === "refuel") {
         if (!refuelUsable(player)) return;
         player.refueling = true;
+        return;
+      }
+      if (kind === "storage") {
+        takeShell(player);
         return;
       }
       if (kind === "fire" || kind === "turret" || kind === "map") {
