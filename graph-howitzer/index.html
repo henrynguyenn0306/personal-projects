@@ -516,7 +516,7 @@
     }
 
     // The stick sets a target speed. The machine eases toward it, and coasts after the hand lets go.
-    // An empty tank cannot speed up. Refueling locks the machine until the player cancels or the tank is full.
+    // An empty tank cannot speed up. Refueling fills in the background and does not pin the machine.
     // Nothing moves until H.O.W.L.E.R has started.
     function updateMachine(player, index, dt) {
       updateStick(player, dt);
@@ -525,24 +525,27 @@
       const y0 = unit.y;
       let moved = false;
       if (machineStarted) {
-        if (player.refueling) {
-          unit.vx = 0;
-          unit.vy = 0;
-        } else {
-          let targetX = 0;
-          let targetY = 0;
-          if (player.gripping && unit.fuel > 0) {
-            targetX = player.tiltX * MAX_MOVE_SPEED;
-            targetY = player.tiltY * MAX_MOVE_SPEED;
-          }
-          const next = approachVelocity(unit.vx, unit.vy, targetX, targetY, dt);
-          unit.vx = next.x;
-          unit.vy = next.y;
-          moved = stepMachine(unit, index, dt);
+        let targetX = 0;
+        let targetY = 0;
+        if (player.gripping && unit.fuel > 0) {
+          targetX = player.tiltX * MAX_MOVE_SPEED;
+          targetY = player.tiltY * MAX_MOVE_SPEED;
         }
+        const next = approachVelocity(unit.vx, unit.vy, targetX, targetY, dt);
+        unit.vx = next.x;
+        unit.vy = next.y;
+        moved = stepMachine(unit, index, dt);
       }
       if (player.refueling && machineStarted) {
         unit.fuel = clampFuel(unit.fuel + dt * MAX_FUEL / REFUEL_SECONDS_FULL);
+        battlefieldDirty = true;
+      }
+      const distance = Math.hypot(unit.x - x0, unit.y - y0);
+      if (machineStarted && distance > 0 && unit.fuel > 0) {
+        unit.fuel = clampFuel(unit.fuel - distance * FUEL_DRAIN_PER_METER);
+        battlefieldDirty = true;
+      }
+      if (player.refueling && machineStarted) {
         if (unit.fuel >= MAX_FUEL) {
           unit.fuel = MAX_FUEL;
           player.refueling = false;
@@ -550,13 +553,6 @@
           addStatusMessage(player, "> Refuel: Complete. Tank 100%.");
         } else {
           setRefuelLine(player, true, Math.round(unit.fuel));
-        }
-        battlefieldDirty = true;
-      } else {
-        const distance = Math.hypot(unit.x - x0, unit.y - y0);
-        if (distance > 0 && unit.fuel > 0) {
-          unit.fuel = clampFuel(unit.fuel - distance * FUEL_DRAIN_PER_METER);
-          battlefieldDirty = true;
         }
       }
       updateTurret(player, dt);
@@ -1862,7 +1858,7 @@
 
     function drawShellStorage(room, player) {
       const rect = getStorageRect(room);
-      const open = player.storageClosedAt == null;
+      const open = player.storageClosedAt == null && !storageRackLocked(player);
       const hover = machineStarted && open && !player.carryingShell ? storageSlotUnderHand(player, storageWell(rect)) : -1;
       ctx.save();
       drawBeveledRect(rect);
@@ -1878,6 +1874,10 @@
       ctx.fillStyle = machineStarted ? "#10140f" : "#000000";
       ctx.fillRect(well.x, well.y, well.w, well.h);
       if (machineStarted && player.hatch < 0.98) drawStorageRack(well, player, hover);
+      if (machineStarted && storageRackLocked(player) && player.hatch < 0.98) {
+        ctx.fillStyle = "rgba(8, 8, 12, 0.55)";
+        ctx.fillRect(well.x, well.y, well.w, well.h);
+      }
       drawStorageHatches(well, machineStarted ? player.hatch : 0);
       drawStorageBase(rect, well);
       ctx.restore();
@@ -1890,12 +1890,16 @@
       }
     }
 
-    // Hatches shut at empty and open again with a full stack. No countdown is drawn.
+    // Hatches shut when the rack is empty or the lock lever is not raised. No countdown is drawn.
     function updateShellStorage(player, dt) {
-      const want = player.storageClosedAt != null ? 1 : 0;
+      const want = player.storageClosedAt != null || storageRackLocked(player) ? 1 : 0;
       const step = dt / 0.35;
       if (player.hatch < want) player.hatch = Math.min(1, player.hatch + step);
       else if (player.hatch > want) player.hatch = Math.max(0, player.hatch - step);
+      if (!storageRackLocked(player)) {
+        const locked = warningIndex(player, "storage-locked");
+        if (locked !== -1) player.messages.splice(locked, 1);
+      }
       if (!machineStarted || player.storageClosedAt == null) return;
       if (frameTime - player.storageClosedAt < SHELL_RESTOCK_SECONDS * 1000) return;
       for (let i = 0; i < player.storageSlots.length; i++) player.storageSlots[i] = true;
@@ -1918,6 +1922,12 @@
 
     function takeShell(player, index) {
       if (player.carryingShell) return;
+      if (storageRackLocked(player)) {
+        if (warningIndex(player, "storage-locked") === -1) {
+          addStatusMessage(player, { text: "> Storage: Rack locked.", color: COLOR_MONITOR_TEXT, kind: "storage-locked" });
+        }
+        return;
+      }
       if (player.storageClosedAt != null || storageFilled(player) <= 0) {
         if (warningIndex(player, "storage-closed") === -1) {
           addStatusMessage(player, { text: "> Storage: Hatches closed.", color: COLOR_MONITOR_TEXT, kind: "storage-closed" });
@@ -2500,9 +2510,23 @@
       return frameTime < player.loaderRecoverUntil;
     }
 
-    // Red while the breech is locked and the gun is not recovering from a shot.
+    // The lever rests up at 0 and sits fully down at 1. FIRE waits for that seat.
+    function loaderLeverDown(player) {
+      return (player.loaderLever || 0) >= 1 - 1e-4;
+    }
+
+    function loaderLeverRaised(player) {
+      return (player.loaderLever || 0) <= 1e-4;
+    }
+
+    // The rack stays shut for the whole stroke, until the lever is back up.
+    function storageRackLocked(player) {
+      return player.loaderLocked || !loaderLeverRaised(player);
+    }
+
+    // Red only once the lock lever is fully down and the gun is not recovering.
     function loaderFireLit(player) {
-      return machineStarted && player.loaderLocked && !loaderRecovering(player);
+      return machineStarted && loaderLeverDown(player) && !loaderRecovering(player);
     }
 
     function compactLoaderSlots(player) {
@@ -2516,11 +2540,11 @@
     }
 
     function pressLoaderFire(player) {
+      if (!loaderLeverDown(player)) return;
       if (loaderRecovering(player)) {
         addStatusMessage(player, "> Loader: Recovering.");
         return;
       }
-      if (!player.loaderLocked) return;
       if (loaderReadySlot(player) < 0) return;
       const reason = fireBlockReason(player);
       if (reason) {
@@ -2877,7 +2901,7 @@
       drawLockLever(parts.lock, player.loaderLever || 0);
       let fireState = "dark";
       if (loaderFireLit(player)) fireState = "lit";
-      else if (loaderRecovering(player) && player.loaderLocked) fireState = "recover";
+      else if (loaderRecovering(player) && loaderLeverDown(player)) fireState = "recover";
       drawLoaderFireButton(parts.fire, fireState);
       ctx.restore();
       if (machineStarted && handOverLoaderHole(player, parts.hole)) drawHoleHighlight(parts.hole);
@@ -5058,11 +5082,6 @@
         interactWithZoom(player, room);
         return;
       }
-      if (player.refueling) {
-        player.refueling = false;
-        setRefuelLine(player, false);
-        return;
-      }
       if (player.gripping) {
         player.gripping = false;
         player.tiltX = 0;
@@ -5094,6 +5113,11 @@
       }
       if (kind === "refuel") {
         if (!refuelUsable(player)) return;
+        if (player.refueling) {
+          player.refueling = false;
+          setRefuelLine(player, false);
+          return;
+        }
         player.refueling = true;
         return;
       }
