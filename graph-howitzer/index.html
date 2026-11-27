@@ -696,8 +696,8 @@
     // Open while the hand is free. Curled for the whole time the interact key is held.
     function drawHand(hand, color) {
       const pose = (hand.gripping || hand.holdingStart || hand.carryingShell || interactKeyHeld(hand)) ? "hold" : "open";
-      drawHandShape(hand.x, hand.y, color, pose);
       if (hand.carryingShell) drawShellGlyph(hand.x, hand.y, SHELL_CARRIED_LENGTH, 0);
+      drawHandShape(hand.x, hand.y, color, pose);
     }
 
     // 0 at rest, 1 at the bottom of the press, then back to 0.
@@ -1232,12 +1232,9 @@
       const rect = getRadarRect(room);
       const bezel = Math.min(MONITOR_BEZEL, rect.width / 4, rect.height / 4);
       const near = stationNearHand(player, room) === "radar";
-      // The bottom-right screw is left off so the red ping keeps that corner.
       drawConsoleFrame(rect, {
-        label: "RADAR",
-        powerOn: machineStarted,
-        skipCorners: ["br"],
-        reserveRight: RED_PING_SIZE
+        label: "",
+        powerOn: machineStarted
       });
 
       const screenX = rect.x + bezel;
@@ -1246,7 +1243,6 @@
       const screenH = rect.height - bezel * 2;
       const ownerIndex = player === player1 ? 0 : 1;
       drawRadarPicture(screenX, screenY, screenW, screenH, ownerIndex, false);
-      drawRedPing(rect, ownerIndex);
       if (near && machineStarted) drawInteractOutline(rect);
     }
 
@@ -1365,8 +1361,6 @@
       }
       drawFrameVents(rect, bezel);
       drawFrameKnob(rect, bezel);
-      const label = drawFramePlate(rect, spec.label, bezel, reserveRight);
-      if (label) drawPowerLed(label, rect, reserveRight, spec.powerOn);
       ctx.restore();
     }
 
@@ -1540,7 +1534,6 @@
       const near = stationNearHand(player, room) === "joystick";
       ctx.save();
       const spot = drawJoystickPlate(rect);
-      drawDrivePlate(rect, player.gripping);
       const tilt = joystickTilt(player);
       drawStick(
         spot.cx,
@@ -1585,16 +1578,6 @@
       drawBolt(rect.x + inset, rect.y + rect.height - inset, boltR);
       drawBolt(rect.x + rect.width - inset, rect.y + rect.height - inset, boltR);
 
-      ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
-      ctx.font = "bold 11px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("FUEL", rect.x + rect.width / 2, rect.y + 16);
-      ctx.fillStyle = machineStarted ? COLOR_JOYSTICK_LED_ON : COLOR_JOYSTICK_LED_OFF;
-      ctx.beginPath();
-      ctx.arc(rect.x + rect.width / 2, rect.y + 30, 3.5, 0, Math.PI * 2);
-      ctx.fill();
-
       const tankX = rect.x + 12;
       const tankY = rect.y + 42;
       const tankW = Math.max(8, rect.width - 24);
@@ -1618,6 +1601,8 @@
 
       ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
       ctx.font = "bold 12px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
       ctx.fillText(Math.round(fuel) + "%", rect.x + rect.width / 2, rect.y + rect.height - 16);
       ctx.restore();
     }
@@ -1640,22 +1625,6 @@
         ctx.fillStyle = "rgba(8, 8, 12, 0.45)";
         ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
       }
-      ctx.fillStyle = usable ? COLOR_JOYSTICK_LABEL_TEXT : COLOR_REFUEL_DISABLED;
-      ctx.font = "bold 10px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("REFUEL", rect.x + rect.width / 2, rect.y + rect.height * 0.36);
-      let led = COLOR_JOYSTICK_LED_OFF;
-      if (player.refueling) {
-        const step = Math.floor((frameTime / 1000) / REFUEL_BLINK_SECONDS);
-        led = step % 2 === 0 ? COLOR_REFUEL_LED : "#5a3a10";
-      } else if (machineStarted && fuelOf(player) <= 0) {
-        led = COLOR_REFUEL_LED;
-      }
-      ctx.fillStyle = led;
-      ctx.beginPath();
-      ctx.arc(rect.x + rect.width / 2, rect.y + rect.height * 0.68, 5, 0, Math.PI * 2);
-      ctx.fill();
       ctx.restore();
       if (near && machineStarted && usable) drawInteractOutline(rect);
     }
@@ -1763,22 +1732,6 @@
           ctx.fillRect(x + gap + i * (ventW + gap), ventY, ventW, ventH);
         }
       }
-      const plateH = Math.min(16, Math.max(12, h * 0.32));
-      const plateW = Math.min(w - 28, 132);
-      const plateX = x + (w - plateW) / 2;
-      const plateY = bottom - plateH;
-      ctx.fillStyle = COLOR_JOYSTICK_LABEL;
-      ctx.fillRect(plateX, plateY, plateW, plateH);
-      ctx.strokeStyle = COLOR_JOYSTICK_EDGE_LIGHT;
-      ctx.lineWidth = 1;
-      ctx.strokeRect(plateX + 0.5, plateY + 0.5, plateW - 1, plateH - 1);
-      ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
-      ctx.font = "bold 9px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("SHELL STORAGE", plateX + plateW / 2, plateY + plateH / 2);
-      drawBolt(plateX - 8, plateY + plateH / 2, 2.2);
-      drawBolt(plateX + plateW + 8, plateY + plateH / 2, 2.2);
     }
 
     function storageFilled(player) {
@@ -1896,13 +1849,6 @@
       if (machineStarted && player.hatch < 0.98) drawStorageRack(well, player, hover);
       drawStorageHatches(well, machineStarted ? player.hatch : 0);
       drawStorageBase(rect, well);
-      let led = COLOR_JOYSTICK_LED_OFF;
-      if (machineStarted && open && player.shells > 0) led = COLOR_JOYSTICK_LED_ON;
-      else if (machineStarted && !open) led = COLOR_REFUEL_LED;
-      ctx.fillStyle = led;
-      ctx.beginPath();
-      ctx.arc(rect.x + rect.width - inset - 6, rect.y + 16, 3.5, 0, Math.PI * 2);
-      ctx.fill();
       ctx.restore();
     }
 
@@ -2226,30 +2172,25 @@
       drawBoreShutter(hole, player.loaderCover || 0);
     }
 
-    // Two doors, same metal as the storage hatches, closing across the bore.
+    // One door slides in from the left. amount 0 is open, 1 is shut.
     function drawBoreShutter(hole, amount) {
       if (amount <= 0.001) return;
-      const lip = Math.max(2, hole.r * 0.12);
       const span = hole.r * 2;
-      const doorW = lip + (hole.r - lip) * amount;
+      const doorW = span * amount;
       const top = hole.cy - hole.r;
+      const x = hole.cx - hole.r;
       ctx.save();
       ctx.beginPath();
       ctx.arc(hole.cx, hole.cy, hole.r - 1, 0, Math.PI * 2);
       ctx.clip();
       ctx.fillStyle = "#4e4e58";
-      ctx.fillRect(hole.cx - hole.r, top, doorW, span);
-      ctx.fillRect(hole.cx + hole.r - doorW, top, doorW, span);
+      ctx.fillRect(x, top, doorW, span);
       ctx.fillStyle = COLOR_JOYSTICK_EDGE_LIGHT;
-      ctx.fillRect(hole.cx - hole.r, top, doorW, 2);
-      ctx.fillRect(hole.cx + hole.r - doorW, top, doorW, 2);
+      ctx.fillRect(x, top, doorW, 2);
       ctx.fillStyle = COLOR_JOYSTICK_EDGE_DARK;
-      ctx.fillRect(hole.cx - hole.r, top + span - 2, doorW, 2);
-      ctx.fillRect(hole.cx + hole.r - doorW, top + span - 2, doorW, 2);
-      if (amount > 0.85) {
-        ctx.fillStyle = "#121216";
-        ctx.fillRect(hole.cx - 1, top + 3, 2, span - 6);
-      }
+      ctx.fillRect(x, top + span - 2, doorW, 2);
+      ctx.fillStyle = "#121216";
+      ctx.fillRect(x + doorW - 2, top + 2, 2, span - 4);
       ctx.restore();
     }
 
@@ -2293,11 +2234,6 @@
       ctx.strokeRect(baseX + 1, baseY + 1, baseW - 2, baseH - 2);
       ctx.fillStyle = "rgba(255, 255, 255, 0.38)";
       ctx.fillRect(baseX + 2, baseY + 2, baseW - 4, 3);
-      ctx.fillStyle = "#1a1a1a";
-      ctx.font = "bold 11px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("LOCK", baseX + baseW / 2, baseY + baseH / 2);
       const pointingDown = handleY + handleH / 2 > baseY + baseH / 2;
       const rodTop = pointingDown ? baseY + baseH : handleY + handleH;
       const rodBottom = pointingDown ? handleY : baseY;
@@ -2439,11 +2375,6 @@
         drawBolt(rect.x + inset, rect.y + rect.height - inset, boltR);
         drawBolt(rect.x + rect.width - inset, rect.y + rect.height - inset, boltR);
       }
-      ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
-      ctx.font = "bold 11px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("LOADER", rect.x + rect.width / 2, rect.y + 14);
       drawLoaderHole(parts.hole, player);
       drawLoaderAmmoBar(parts.bar, loaderReadyCount(player));
       drawLockLever(parts.lock, player.loaderLever || 0);
@@ -3710,17 +3641,6 @@
         drawBolt(rect.x + rect.width - inset, rect.y + rect.height - inset, boltR);
       }
 
-      const label = rect.width >= 160 ? "FIRE CONTROL" : "FIRE";
-      ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
-      ctx.font = "bold 11px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(label, rect.x + rect.width / 2 - 8, rect.y + rect.height - 16);
-      ctx.fillStyle = !machineStarted ? COLOR_JOYSTICK_LED_OFF : (player.canFire ? COLOR_JOYSTICK_LED_ON : COLOR_REFUEL_LED);
-      ctx.beginPath();
-      ctx.arc(rect.x + rect.width - inset - 8, rect.y + rect.height - 16, 3.5, 0, Math.PI * 2);
-      ctx.fill();
-
       const body = stationFireLayout(rect);
       // Dark glass until H.O.W.L.E.R has finished booting. No equation, graph, dial, or map yet.
       if (!machineStarted) {
@@ -4178,18 +4098,19 @@
         return;
       }
 
-      const centerX = screenX + screenW / 2;
-      const centerY = screenY + screenH / 2;
+      // The player stays fixed: centered, three quarters of the way down the radar.
+      const playerX = screenX + screenW / 2;
+      const playerY = screenY + screenH * 0.75;
       // Half of the shorter side is RADAR_RANGE. The ring and the sweep both use that.
       const rangePx = Math.min(screenW, screenH) / 2;
-      if (!showBlips) drawRadarCrosshair(screenX, screenY, screenW, screenH, centerX, centerY);
-      if (showBlips) drawRadarBlips(centerX, centerY, rangePx, ownerIndex);
-      drawRadarSweep(centerX, centerY, rangePx);
-      drawRadarRangeRings(centerX, centerY, rangePx, showBlips);
+      if (!showBlips) drawRadarCrosshair(screenX, screenY, screenW, screenH, playerX, playerY);
+      if (showBlips) drawRadarBlips(playerX, playerY, rangePx, ownerIndex);
+      drawRadarSweep(playerX, playerY, rangePx);
+      drawRadarRangeRings(playerX, playerY, rangePx, showBlips);
 
       ctx.fillStyle = COLOR_RADAR_YOU;
       ctx.beginPath();
-      ctx.arc(centerX, centerY, showBlips ? 5 : 3, 0, Math.PI * 2);
+      ctx.arc(playerX, playerY, showBlips ? 5 : 4, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
     }
@@ -4328,13 +4249,12 @@
       return lineHeight * 2 + 12;
     }
 
-    function monitorClearRect(screen, lineHeight) {
-      const barH = statusStripHeight(lineHeight);
-      const height = Math.max(14, Math.min(18, lineHeight - 2));
-      const width = 52;
+    function monitorClearRect(screen) {
+      const width = 46;
+      const height = 16;
       return {
         x: screen.x + screen.width - width - 6,
-        y: screen.y + screen.height - barH + 6,
+        y: screen.y + 6,
         width: width,
         height: height
       };
@@ -4377,13 +4297,14 @@
     function drawMessageList(player, screenX, screenY, screenW, screenH, fontSize, lineHeight) {
       // Health and activity keep a strip at the bottom. Log lines stop above it.
       const barH = machineStarted ? statusStripHeight(lineHeight) : 0;
-      const logH = Math.max(8, screenH - barH);
       const screen = { x: screenX, y: screenY, width: screenW, height: screenH };
-      const clear = machineStarted ? monitorClearRect(screen, lineHeight) : null;
+      const clear = machineStarted ? monitorClearRect(screen) : null;
+      const logTop = clear ? clear.y + clear.height + 4 - screenY : 0;
+      const logH = Math.max(8, screenH - barH - logTop);
 
       ctx.save();
       ctx.beginPath();
-      ctx.rect(screenX, screenY, screenW, logH);
+      ctx.rect(screenX, screenY + logTop, screenW, logH);
       ctx.clip();
       ctx.font = fontSize + "px monospace";
       ctx.textAlign = "left";
@@ -4399,7 +4320,7 @@
       const start = Math.max(0, wrapped.length - maxLines);
       for (let i = start; i < wrapped.length; i++) {
         ctx.fillStyle = wrapped[i].color;
-        ctx.fillText(wrapped[i].text, screenX + 8, screenY + 6 + (i - start) * lineHeight);
+        ctx.fillText(wrapped[i].text, screenX + 8, screenY + logTop + 4 + (i - start) * lineHeight);
       }
       ctx.restore();
 
@@ -4412,7 +4333,7 @@
       ctx.moveTo(screenX + 6, barY + 1);
       ctx.lineTo(screenX + screenW - 6, barY + 1);
       ctx.stroke();
-      const textW = Math.max(8, clear.x - (screenX + 8) - 6);
+      const textW = Math.max(8, screenW - 16);
       const health = healthStatusOf(healthPercent(player));
       const state = machineStateOf(player);
       drawLabeledLine("Status: ", health.name + " (" + health.percent + "%)", health.color, screenX + 8, barY + 5, fontSize, textW);
@@ -4536,7 +4457,7 @@
       }
       if (kind === "monitor") {
         const screen = monitorScreen(room);
-        if (pointInRect(player.x, player.y, monitorClearRect(screen, MONITOR_LINE_HEIGHT))) {
+        if (pointInRect(player.x, player.y, monitorClearRect(screen))) {
           clearMonitorLog(player);
           return;
         }
@@ -4580,7 +4501,7 @@
       if (player.panelKind !== "fire" && player.panelKind !== "radar" && player.panelKind !== "turret" && player.panelKind !== "map") {
         const view = zoomContent(room, player.panelKind);
         const screen = { x: view.screenX, y: view.screenY, width: view.screenW, height: view.screenH };
-        if (pointInRect(tip.x, tip.y, monitorClearRect(screen, MONITOR_LINE_HEIGHT))) {
+        if (pointInRect(tip.x, tip.y, monitorClearRect(screen))) {
           clearMonitorLog(player);
           return;
         }
