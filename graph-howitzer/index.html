@@ -1227,7 +1227,7 @@
     // Radar sits beside the monitor. Half of the square is RADAR_RANGE units.
     // The frame matches the monitor. Nearness is only the pulsing outline.
     // The screen stays black until H.O.W.L.E.R starts.
-    // The small radar shows the sweep and the player dot only. Blips stay hidden here.
+    // The small radar shows the sweep and the center player dot. Blips stay hidden here.
     // The hand passes over it; only the middle wall blocks movement.
     function drawRadar(room, player) {
       const rect = getRadarRect(room);
@@ -1244,6 +1244,7 @@
       const screenH = rect.height - bezel * 2;
       const ownerIndex = player === player1 ? 0 : 1;
       drawRadarPicture(screenX, screenY, screenW, screenH, ownerIndex, false);
+      drawRedPing(rect, ownerIndex);
       if (near && machineStarted) drawInteractOutline(rect);
     }
 
@@ -3865,14 +3866,17 @@
       ctx.restore();
     }
 
-    // Small square in the bottom-right bezel. Size follows the frame thickness.
+    // Opponent-nearby lamp. Same horizontal place as the lower-right glass dot,
+    // dropped onto the metal under the glass. The corner screw stays.
     // Blinks red when the opponent is in radar range or near an obstacle.
-    // Off until H.O.W.L.E.R starts.
+    // Dark until that happens.
     function drawRedPing(radarRect, ownerIndex) {
       const bezel = Math.min(MONITOR_BEZEL, radarRect.width / 4, radarRect.height / 4);
-      const size = Math.min(RED_PING_SIZE, bezel);
-      const x = radarRect.x + radarRect.width - size;
-      const y = radarRect.y + radarRect.height - size;
+      const screenX = radarRect.x + bezel;
+      const screenW = radarRect.width - bezel * 2;
+      const radius = Math.min(3, Math.max(2, bezel * 0.25));
+      const x = screenX + screenW - 16;
+      const y = radarRect.y + radarRect.height - bezel / 2;
 
       let lit = false;
       if (redPingActive(ownerIndex)) {
@@ -3880,7 +3884,9 @@
         lit = step % 2 === 0;
       }
       ctx.fillStyle = lit ? COLOR_RED_PING_ON : COLOR_RED_PING_OFF;
-      ctx.fillRect(x, y, size, size);
+      ctx.beginPath();
+      ctx.arc(x, y, Math.max(2, radius), 0, Math.PI * 2);
+      ctx.fill();
     }
 
     function enemyInRadarRange(ownerIndex) {
