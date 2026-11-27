@@ -176,7 +176,7 @@
     const FIRE_DEFAULT_EQUATION = "-0.05x^2 + 2x";
     const EQUATION_PREFIX = "y = ";
     const SHELL_SPEED = 20; // m/s along the path, not along the ground
-    const SHELL_STORAGE_COUNT = 9;
+    const SHELL_STORAGE_COUNT = 8;
     const SHELL_CARRIED_LENGTH = 62; // carried and falling shell, in pixels
     const LOADER_SLOT_COUNT = 3;
     const LOADER_LOAD_SECONDS = 2;
@@ -251,8 +251,8 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "", shells: SHELL_STORAGE_COUNT, carryingShell: false, storageClosedAt: null, hatch: 0, loaderSlots: [null, null, null], loaderLocked: false, loaderCover: 0, loaderLever: 0, loaderRecoverUntil: 0, statusNotice: "" };
-    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "", shells: SHELL_STORAGE_COUNT, carryingShell: false, storageClosedAt: null, hatch: 0, loaderSlots: [null, null, null], loaderLocked: false, loaderCover: 0, loaderLever: 0, loaderRecoverUntil: 0, statusNotice: "" };
+    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "", shells: SHELL_STORAGE_COUNT, storageSlots: [true, true, true, true, true, true, true, true], carryingShell: false, storageClosedAt: null, hatch: 0, loaderSlots: [null, null, null], loaderLocked: false, loaderCover: 0, loaderLever: 0, loaderRecoverUntil: 0, statusNotice: "" };
+    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "", shells: SHELL_STORAGE_COUNT, storageSlots: [true, true, true, true, true, true, true, true], carryingShell: false, storageClosedAt: null, hatch: 0, loaderSlots: [null, null, null], loaderLocked: false, loaderCover: 0, loaderLever: 0, loaderRecoverUntil: 0, statusNotice: "" };
     const fallingShells = [];
 
     // The wall sits in the middle. Each player owns one side of it.
@@ -1711,38 +1711,101 @@
       drawBolt(plateX + plateW + 8, plateY + plateH / 2, 2.2);
     }
 
-    // The top shell is the one a hand can take. The rest of the count peeks under it.
-    function drawStorageChain(well, player) {
-      const count = player.shells;
-      if (count <= 0) return;
-      ctx.save();
+    function storageFilled(player) {
+      let count = 0;
+      for (let i = 0; i < player.storageSlots.length; i++) {
+        if (player.storageSlots[i]) count += 1;
+      }
+      return count;
+    }
+
+    // Four columns by two rows of end-on shell bases inside the bay.
+    function storageRack(well) {
+      const cols = 4;
+      const rows = 2;
+      const gapX = Math.max(4, well.w * 0.03);
+      const gapY = Math.max(4, well.h * 0.08);
+      const cellW = (well.w - gapX * (cols + 1)) / cols;
+      const cellH = (well.h - gapY * (rows + 1)) / rows;
+      const radius = Math.max(5, Math.min(cellW, cellH) * 0.42);
+      const slots = [];
+      for (let i = 0; i < cols * rows; i++) {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        slots.push({
+          index: i,
+          cx: well.x + gapX + cellW * col + cellW / 2,
+          cy: well.y + gapY + cellH * row + cellH / 2,
+          r: radius
+        });
+      }
+      return slots;
+    }
+
+    function storageSlotUnderHand(player, well) {
+      const slots = storageRack(well);
+      let best = -1;
+      let bestDist = 0;
+      for (let i = 0; i < slots.length; i++) {
+        const slot = slots[i];
+        const dx = player.x - slot.cx;
+        const dy = player.y - slot.cy;
+        const dist = dx * dx + dy * dy;
+        const reach = (slot.r + 3) * (slot.r + 3);
+        if (dist <= reach && (best === -1 || dist < bestDist)) {
+          best = slot.index;
+          bestDist = dist;
+        }
+      }
+      return best;
+    }
+
+    // Same brass base the loader shows at the mouth of the bore.
+    function drawShellButt(cx, cy, radius) {
       ctx.beginPath();
-      ctx.rect(well.x + 2, well.y + 2, well.w - 4, well.h - 4);
-      ctx.clip();
-      const angle = player === player1 ? 0 : Math.PI;
-      const topLen = Math.max(40, Math.min(well.w * 0.52, 112));
-      const thick = topLen * 0.28;
-      const extras = count <= 1 ? 0 : Math.min(4, Math.ceil((count - 1) * 4 / (SHELL_STORAGE_COUNT - 1)));
-      const room = Math.max(0, well.h - thick - 16);
-      const peek = extras > 0 ? Math.min(thick * 0.85, room / extras) : 0;
-      const topY = well.y + 10 + thick / 2;
-      const cx = well.x + well.w / 2;
-      if (extras > 0) {
-        ctx.fillStyle = "#3a3428";
-        ctx.fillRect(cx - topLen * 0.36, topY, 3, peek * extras);
-        ctx.fillRect(cx + topLen * 0.36 - 3, topY, 3, peek * extras);
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.fillStyle = "rgb(196,154,78)";
+      ctx.fill();
+      ctx.lineWidth = Math.max(1.5, radius * 0.07);
+      ctx.strokeStyle = "rgb(110,78,40)";
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius * 0.22, 0, Math.PI * 2);
+      ctx.fillStyle = "rgb(74,52,28)";
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius * 0.08, 0, Math.PI * 2);
+      ctx.fillStyle = "rgb(36,24,14)";
+      ctx.fill();
+    }
+
+    function drawStorageRack(well, player, hover) {
+      const slots = storageRack(well);
+      for (let i = 0; i < slots.length; i++) {
+        const slot = slots[i];
+        ctx.beginPath();
+        ctx.arc(slot.cx, slot.cy, slot.r, 0, Math.PI * 2);
+        ctx.fillStyle = "#070807";
+        ctx.fill();
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = "#2a2e2c";
+        ctx.stroke();
+        if (player.storageSlots[slot.index]) drawShellButt(slot.cx, slot.cy, slot.r * 0.92);
       }
-      for (let i = extras; i >= 0; i--) {
-        drawShellGlyph(cx, topY + i * peek, i === 0 ? topLen : topLen * 0.92, angle);
-      }
+      if (hover < 0 || !player.storageSlots[hover]) return;
+      const slot = slots[hover];
+      ctx.save();
+      interactOutlineStyle();
+      ctx.beginPath();
+      ctx.arc(slot.cx, slot.cy, slot.r + 3, 0, Math.PI * 2);
+      ctx.stroke();
       ctx.restore();
     }
 
     function drawShellStorage(room, player) {
       const rect = getStorageRect(room);
-      const near = stationNearHand(player, room) === "storage";
       const open = player.storageClosedAt == null;
-      const usable = machineStarted && open && player.shells > 0 && !player.carryingShell;
+      const hover = machineStarted && open && !player.carryingShell ? storageSlotUnderHand(player, storageWell(rect)) : -1;
       ctx.save();
       drawBeveledRect(rect);
       const boltR = Math.max(2, Math.min(3, rect.width * 0.03));
@@ -1756,7 +1819,7 @@
       const well = storageWell(rect);
       ctx.fillStyle = machineStarted ? "#10140f" : "#000000";
       ctx.fillRect(well.x, well.y, well.w, well.h);
-      if (machineStarted && player.shells > 0 && player.hatch < 0.98) drawStorageChain(well, player);
+      if (machineStarted && player.hatch < 0.98) drawStorageRack(well, player, hover);
       drawStorageHatches(well, machineStarted ? player.hatch : 0);
       drawStorageBase(rect, well);
       let led = COLOR_JOYSTICK_LED_OFF;
@@ -1767,7 +1830,6 @@
       ctx.arc(rect.x + rect.width - inset - 6, rect.y + 16, 3.5, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
-      if (near && usable) drawInteractOutline(rect);
     }
 
     function drawFallingShells() {
@@ -1785,6 +1847,7 @@
       else if (player.hatch > want) player.hatch = Math.max(0, player.hatch - step);
       if (!machineStarted || player.storageClosedAt == null) return;
       if (frameTime - player.storageClosedAt < SHELL_RESTOCK_SECONDS * 1000) return;
+      for (let i = 0; i < player.storageSlots.length; i++) player.storageSlots[i] = true;
       player.shells = SHELL_STORAGE_COUNT;
       player.storageClosedAt = null;
       const closed = warningIndex(player, "storage-closed");
@@ -1802,15 +1865,17 @@
       }
     }
 
-    function takeShell(player) {
+    function takeShell(player, index) {
       if (player.carryingShell) return;
-      if (player.storageClosedAt != null || player.shells <= 0) {
+      if (player.storageClosedAt != null || storageFilled(player) <= 0) {
         if (warningIndex(player, "storage-closed") === -1) {
           addStatusMessage(player, { text: "> Storage: Hatches closed.", color: COLOR_MONITOR_TEXT, kind: "storage-closed" });
         }
         return;
       }
-      player.shells -= 1;
+      if (index < 0 || !player.storageSlots[index]) return;
+      player.storageSlots[index] = false;
+      player.shells = storageFilled(player);
       player.carryingShell = true;
       addStatusMessage(player, "> Storage: Shell taken.");
       if (player.shells <= 0) {
@@ -2014,7 +2079,7 @@
     // Base of the shell, seen straight into the bore. It starts filling the hole, then recedes.
     function drawShellBaseInBore(hole, t) {
       const eased = t * t * (3 - 2 * t);
-      const radius = hole.r * (0.86 - 0.28 * eased);
+      const radius = hole.r * (0.93 - 0.28 * eased);
       const black = [5, 6, 5];
       ctx.save();
       ctx.globalAlpha = 1 - eased;
@@ -2046,15 +2111,6 @@
       shade.addColorStop(1, "#050605");
       ctx.fillStyle = shade;
       ctx.fillRect(hole.cx - hole.r - 2, hole.cy - hole.r - 2, hole.r * 2 + 4, hole.r * 2 + 4);
-      if (machineStarted) {
-        for (let i = 0; i < player.loaderSlots.length; i++) {
-          const slot = player.loaderSlots[i];
-          if (!slot || slot.ready) continue;
-          const t = Math.max(0, Math.min(1, slot.t));
-          if (t >= 0.995) continue;
-          drawShellBaseInBore(hole, t);
-        }
-      }
       ctx.restore();
       ctx.beginPath();
       ctx.arc(hole.cx, hole.cy, hole.r, 0, Math.PI * 2);
@@ -2069,6 +2125,19 @@
       ctx.strokeStyle = "#000000";
       ctx.lineWidth = 2;
       ctx.stroke();
+      if (!machineStarted) return;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(hole.cx, hole.cy, hole.r * 0.96, 0, Math.PI * 2);
+      ctx.clip();
+      for (let i = 0; i < player.loaderSlots.length; i++) {
+        const slot = player.loaderSlots[i];
+        if (!slot || slot.ready) continue;
+        const t = Math.max(0, Math.min(1, slot.t));
+        if (t >= 0.995) continue;
+        drawShellBaseInBore(hole, t);
+      }
+      ctx.restore();
     }
 
     function drawLockRod(x, top, width, bottom) {
@@ -2087,19 +2156,19 @@
       ctx.fill();
     }
 
-    // Gray handle on two black rods into a gray base. 0 is raised, 1 is pushed down.
+    // 0 points up (unlocked). 1 points down (locked). The base is the pivot.
     function drawLockLever(rect, pose) {
       const amount = pose * pose * (3 - 2 * pose);
-      const baseH = Math.max(28, rect.height * 0.42);
-      const baseW = rect.width * 0.86;
+      const baseW = rect.width * 0.78;
+      const baseH = Math.max(18, rect.height * 0.26);
       const baseX = rect.x + (rect.width - baseW) / 2;
-      const baseY = rect.y + rect.height - baseH;
-      const handleH = Math.max(12, rect.height * 0.15);
+      const baseY = rect.y + (rect.height - baseH) / 2;
+      const handleH = Math.max(10, rect.height * 0.13);
       const handleW = baseW * 0.92;
       const handleX = rect.x + (rect.width - handleW) / 2;
-      const raisedY = rect.y + 2;
-      const loweredY = baseY - handleH - 6;
-      const handleY = raisedY + (loweredY - raisedY) * amount;
+      const upY = rect.y + 2;
+      const downY = rect.y + rect.height - handleH - 2;
+      const handleY = upY + (downY - upY) * amount;
       const baseShade = ctx.createLinearGradient(baseX, baseY, baseX, baseY + baseH);
       baseShade.addColorStop(0, "#c2c2ca");
       baseShade.addColorStop(0.2, "#8e8e96");
@@ -2107,17 +2176,21 @@
       ctx.fillStyle = baseShade;
       ctx.fillRect(baseX, baseY, baseW, baseH);
       ctx.fillStyle = "rgba(0, 0, 0, 0.16)";
-      ctx.fillRect(baseX + 7, baseY + baseH * 0.46, baseW - 14, baseH * 0.36);
+      ctx.fillRect(baseX + 6, baseY + baseH * 0.28, baseW - 12, baseH * 0.44);
       ctx.strokeStyle = "#000000";
       ctx.lineWidth = 2;
       ctx.strokeRect(baseX + 1, baseY + 1, baseW - 2, baseH - 2);
       ctx.fillStyle = "rgba(255, 255, 255, 0.38)";
       ctx.fillRect(baseX + 2, baseY + 2, baseW - 4, 3);
-      const rodW = Math.max(8, rect.width * 0.1);
-      const rodTop = handleY + handleH * 0.42;
-      const rodBottom = baseY + baseH * 0.55;
-      drawLockRod(handleX + handleW * 0.22, rodTop, rodW, rodBottom);
-      drawLockRod(handleX + handleW * 0.78 - rodW, rodTop, rodW, rodBottom);
+      const handleMid = handleY + handleH / 2;
+      const rodW = Math.max(7, rect.width * 0.1);
+      const pointingDown = handleMid > baseY + baseH / 2;
+      const rodA = pointingDown ? baseY + baseH * 0.35 : handleMid;
+      const rodB = pointingDown ? handleMid : baseY + baseH * 0.65;
+      if (rodB - rodA > 6) {
+        drawLockRod(handleX + handleW * 0.22, rodA, rodW, rodB);
+        drawLockRod(handleX + handleW * 0.78 - rodW, rodA, rodW, rodB);
+      }
       const handleShade = ctx.createLinearGradient(handleX, handleY, handleX, handleY + handleH);
       handleShade.addColorStop(0, "#d8d8de");
       handleShade.addColorStop(0.5, "#9a9aa3");
@@ -2133,24 +2206,51 @@
       ctx.font = "bold 11px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText("LOCK", baseX + baseW / 2, baseY + baseH * 0.74);
+      ctx.fillText("LOCK", baseX + baseW / 2, baseY + baseH / 2);
+    }
+
+    function loaderFireCircle(rect) {
+      return {
+        cx: rect.x + rect.width / 2,
+        cy: rect.y + rect.height / 2,
+        r: Math.max(8, Math.min(rect.width, rect.height) / 2 - 2)
+      };
+    }
+
+    function handOverFireButton(player, rect) {
+      const button = loaderFireCircle(rect);
+      const dx = player.x - button.cx;
+      const dy = player.y - button.cy;
+      return dx * dx + dy * dy <= button.r * button.r;
     }
 
     function drawLoaderFireButton(rect, state) {
+      const button = loaderFireCircle(rect);
       const lit = state === "lit";
       const recover = state === "recover";
-      ctx.fillStyle = lit ? "#c62828" : (recover ? "#4a2c2e" : "#1a1214");
-      ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
-      ctx.fillStyle = lit ? "#ff5a4a" : (recover ? "#6a3a3c" : "#2a1c1e");
-      ctx.fillRect(rect.x, rect.y, rect.width, Math.max(3, rect.height * 0.16));
-      ctx.strokeStyle = lit ? "#ffd0d0" : "#3a2a2c";
+      const fill = ctx.createRadialGradient(button.cx - button.r * 0.3, button.cy - button.r * 0.35, button.r * 0.1, button.cx, button.cy, button.r);
+      if (lit) {
+        fill.addColorStop(0, "#ff6a5a");
+        fill.addColorStop(1, "#9e1818");
+      } else if (recover) {
+        fill.addColorStop(0, "#6a3a3c");
+        fill.addColorStop(1, "#3a2224");
+      } else {
+        fill.addColorStop(0, "#3a2a2c");
+        fill.addColorStop(1, "#140e10");
+      }
+      ctx.beginPath();
+      ctx.arc(button.cx, button.cy, button.r, 0, Math.PI * 2);
+      ctx.fillStyle = fill;
+      ctx.fill();
       ctx.lineWidth = 2;
-      ctx.strokeRect(rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 2);
+      ctx.strokeStyle = lit ? "#ffd0d0" : "#3a2a2c";
+      ctx.stroke();
       ctx.fillStyle = lit ? "#fff4f4" : "#6e6062";
-      ctx.font = "bold " + Math.max(14, Math.min(22, Math.floor(rect.height * 0.42))) + "px sans-serif";
+      ctx.font = "bold " + Math.max(12, Math.min(18, Math.floor(button.r * 0.42))) + "px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText("FIRE", rect.x + rect.width / 2, rect.y + rect.height / 2 + 1);
+      ctx.fillText("FIRE", button.cx, button.cy + 1);
     }
 
     function drawLoader(room, player) {
@@ -2183,7 +2283,7 @@
 
     function pressLoader(player, room) {
       const parts = loaderParts(getLoaderRect(room));
-      if (pointInRect(player.x, player.y, parts.fire)) {
+      if (handOverFireButton(player, parts.fire)) {
         pressLoaderFire(player);
         return;
       }
@@ -4256,7 +4356,8 @@
         return;
       }
       if (kind === "storage") {
-        takeShell(player);
+        const well = storageWell(getStorageRect(room));
+        takeShell(player, storageSlotUnderHand(player, well));
         return;
       }
       if (kind === "loader") {
