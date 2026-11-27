@@ -184,7 +184,9 @@
     const SHELL_BODY_RADIUS = 0.08; // the shell dot. In-air contact with the opponent uses this, not the blast.
     const SHELL_BLAST_RADIUS = 2.45; // meters. X circle, ground check, damage, and carving.
     const HINT_RANGE = 50; // meters. A ground impact inside this range of the opponent keeps a distance hint.
-    const SHOT_NOTICE_MS = 4000; // how long the status pop-up stays up, including its fade.
+    const FIRE_SHOOT_MS = 1000; // Status stays on Shooting for the first second after FIRE.
+    const FIRE_SHAKE_MS = 200; // short room shake when a shell leaves the bore.
+    const FIRE_SHAKE_PX = 4.5;
     const SHELL_OBSTACLE_HITS = 3; // a third blast removes the obstacle
     const SHELL_EXPLOSION_SECONDS = 0.8;
     const SHELL_STORAGE_COUNT = 8;
@@ -262,8 +264,8 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "", shells: SHELL_STORAGE_COUNT, storageSlots: [true, true, true, true, true, true, true, true], carryingShell: false, storageClosedAt: null, hatch: 0, loaderSlots: [null, null, null], loaderLocked: false, loaderCover: 0, loaderLever: 0, loaderRecoverUntil: 0, statusNotice: "", attackMarks: [], mapMark: -1, shotNotice: null };
-    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "", shells: SHELL_STORAGE_COUNT, storageSlots: [true, true, true, true, true, true, true, true], carryingShell: false, storageClosedAt: null, hatch: 0, loaderSlots: [null, null, null], loaderLocked: false, loaderCover: 0, loaderLever: 0, loaderRecoverUntil: 0, statusNotice: "", attackMarks: [], mapMark: -1, shotNotice: null };
+    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "", shells: SHELL_STORAGE_COUNT, storageSlots: [true, true, true, true, true, true, true, true], carryingShell: false, storageClosedAt: null, hatch: 0, loaderSlots: [null, null, null], loaderLocked: false, loaderCover: 0, loaderLever: 0, loaderRecoverUntil: 0, statusNotice: "", attackMarks: [], mapMark: -1, roomShakeUntil: 0 };
+    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "", shells: SHELL_STORAGE_COUNT, storageSlots: [true, true, true, true, true, true, true, true], carryingShell: false, storageClosedAt: null, hatch: 0, loaderSlots: [null, null, null], loaderLocked: false, loaderCover: 0, loaderLever: 0, loaderRecoverUntil: 0, statusNotice: "", attackMarks: [], mapMark: -1, roomShakeUntil: 0 };
     const fallingShells = [];
     const liveShells = [];
 
@@ -840,7 +842,29 @@
       ctx.fillText(text, middle, 16);
     }
 
+    // A few pixels, dying out over the shake window. Both rooms move together.
+    function roomShake() {
+      let amp = 0;
+      const players = [player1, player2];
+      for (let i = 0; i < players.length; i++) {
+        const left = (players[i].roomShakeUntil || 0) - frameTime;
+        if (left > 0) amp = Math.max(amp, (left / FIRE_SHAKE_MS) * FIRE_SHAKE_PX);
+      }
+      if (amp <= 0) return null;
+      return {
+        x: Math.sin(frameTime * 0.055) * amp,
+        y: Math.cos(frameTime * 0.07) * amp * 0.65
+      };
+    }
+
     function draw() {
+      const kick = roomShake();
+      ctx.fillStyle = COLOR_ROOM_1;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      if (kick) {
+        ctx.save();
+        ctx.translate(kick.x, kick.y);
+      }
       const rooms = getRooms();
 
       ctx.fillStyle = COLOR_ROOM_1;
@@ -884,6 +908,7 @@
 
       if (player1.panelOpen) drawPointingHand(player1, COLOR_P1);
       if (player2.panelOpen) drawPointingHand(player2, COLOR_P2);
+      if (kick) ctx.restore();
     }
 
     let lastTime = 0;
@@ -980,13 +1005,12 @@
       return false;
     }
 
-    // One activity for the line under health. Renewing shells lives here.
+    // One activity on the Status line. FIRE is Shooting, then Cooling down, then the room again.
     function machineStateOf(player) {
-      if (playerHasLiveShell(player)) return { text: "Shooting", color: "#ff8a3d" };
       if (player.shootingUntil && frameTime < player.shootingUntil) {
         return { text: "Shooting", color: "#ff8a3d" };
       }
-      if (loaderRecovering(player)) return { text: "Recovering", color: "#ffb020" };
+      if (loaderRecovering(player)) return { text: "Cooling down", color: "#ffb020" };
       if (loaderIsLoading(player)) return { text: "Loading", color: "#ffe14a" };
       if (machineStarted && player.storageClosedAt != null) {
         return { text: "Reloading storage (Renewing shells in 1 minute)", color: COLOR_REFUEL_LED };
@@ -2104,7 +2128,7 @@
       return (Math.round(value * 10) / 10).toFixed(1);
     }
 
-    // Ground reports are the distance to the opponent. Nothing else is added.
+    // Ground reports lead with the distance. A hit note is added only when something was struck.
     function impactDistanceText(shell) {
       const enemy = battlefield.players[1 - shell.owner];
       if (!enemy) return "Shell impacted: too far from the Opponent";
@@ -2113,12 +2137,8 @@
       return "Shell impacted: " + Math.round(dist) + " m from the Opponent";
     }
 
-    function shellImpactLine(reason, shell, outcome) {
-      const onGround = reason === "ground" || (reason === "end of path" && shell.height <= 0.05);
-      if (onGround) return impactDistanceText(shell);
-      const speed = Math.round(shell.speed);
-      const place = "(" + formatImpactCoord(shell.blast.x) + ", " + formatImpactCoord(shell.blast.y) + ") m, " + speed + " m/s";
-      let line = "> Shell: Impact (" + reason + ") at " + place + ".";
+    function shellHitNotes(shell, outcome) {
+      let line = "";
       if (outcome.opponent) line += " Opponent hit (-" + shell.damage + ").";
       for (let i = 0; i < outcome.obstacles.length; i++) {
         const note = outcome.obstacles[i];
@@ -2126,6 +2146,18 @@
         else line += " Obstacle damaged (" + note.hits + "/" + SHELL_OBSTACLE_HITS + ").";
       }
       return line;
+    }
+
+    function shellImpactLine(reason, shell, outcome) {
+      const onGround = reason === "ground" || (reason === "end of path" && shell.height <= 0.05);
+      if (onGround) {
+        const notes = shellHitNotes(shell, outcome);
+        const line = impactDistanceText(shell);
+        return notes ? line + "." + notes : line;
+      }
+      const speed = Math.round(shell.speed);
+      const place = "(" + formatImpactCoord(shell.blast.x) + ", " + formatImpactCoord(shell.blast.y) + ") m, " + speed + " m/s";
+      return "> Shell: Impact (" + reason + ") at " + place + "." + shellHitNotes(shell, outcome);
     }
 
     // The blast circle is the X marker's radius. It hurts the opponent and carves obstacles.
@@ -2186,7 +2218,6 @@
       addStatusMessage(player, shellImpactLine(reason, shell, outcome));
       const onGround = reason === "ground" || (reason === "end of path" && shell.height <= 0.05);
       if (onGround) addGroundMark(player, shell);
-      showShotNotice(player, shotNoticeText(reason, shell, outcome, onGround));
     }
 
     // Distance is frozen when the shell lands. Later movement does not change the mark.
@@ -2204,30 +2235,6 @@
       if (!player.attackMarks) player.attackMarks = [];
       const axis = axisFromGame(shell.blast.x, shell.blast.y);
       player.attackMarks.push({ x: axis.x, y: axis.y, hint: hint });
-    }
-
-    function shotNoticeText(reason, shell, outcome, onGround) {
-      if (outcome.opponent) return "Target hit! -" + shell.damage + " HP";
-      let destroyed = false;
-      let hits = 0;
-      for (let i = 0; i < outcome.obstacles.length; i++) {
-        const note = outcome.obstacles[i];
-        if (note.destroyed) destroyed = true;
-        if (note.hits > hits) hits = note.hits;
-      }
-      if (destroyed) return "Obstacle destroyed";
-      if (hits > 0) return "Obstacle hit (" + hits + "/" + SHELL_OBSTACLE_HITS + ")";
-      if (reason === "border") return "Shell hit the border";
-      if (!onGround) return "";
-      return impactDistanceText(shell);
-    }
-
-    function showShotNotice(player, text) {
-      if (!text) {
-        player.shotNotice = null;
-        return;
-      }
-      player.shotNotice = { text: text, from: frameTime };
     }
 
     function pathPoint(shell, seg, t) {
@@ -2520,9 +2527,9 @@
       compactLoaderSlots(player);
       player.statusNotice = "";
       player.loaderRecoverUntil = frameTime + LOADER_RECOVER_SECONDS * 1000;
-      player.shootingUntil = frameTime + 450;
+      player.shootingUntil = frameTime + FIRE_SHOOT_MS;
+      player.roomShakeUntil = frameTime + FIRE_SHAKE_MS;
       fireShell(player);
-      if (loaderCount(player) === 0) player.loaderLocked = false;
     }
 
     // FIRE sits on the lock. The bore is shifted up to leave room for the ammo bar.
@@ -3468,13 +3475,17 @@
           }
         }
         if (!shell.alive) continue;
-        ctx.fillStyle = "#ffe14a";
+        const dotR = Math.max(9, arm + 5);
         ctx.beginPath();
-        ctx.arc(px(shell.distance), py(shell.height), Math.max(5, arm), 0, Math.PI * 2);
+        ctx.arc(px(shell.distance), py(shell.height), dotR, 0, Math.PI * 2);
+        ctx.fillStyle = "#ffe14a";
         ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "#1a1408";
+        ctx.stroke();
         ctx.fillStyle = "#fff6d0";
         ctx.beginPath();
-        ctx.arc(px(shell.distance), py(shell.height), Math.max(2, arm * 0.45), 0, Math.PI * 2);
+        ctx.arc(px(shell.distance), py(shell.height), Math.max(3.5, dotR * 0.4), 0, Math.PI * 2);
         ctx.fill();
       }
     }
@@ -4075,7 +4086,7 @@
         ctx.rect(corner.x, corner.y, wide / spanX * plot.w, deep / spanY * plot.h);
       }
       ctx.clip();
-      ctx.fillStyle = obstacle.type === "tower" ? "#c8c8d2" : "#8a8a96";
+      ctx.fillStyle = "#8a8a96";
       ctx.fill();
       const holes = obstacle.holes || [];
       ctx.fillStyle = "#071c10";
@@ -4962,9 +4973,7 @@
       const showStatus = machineStarted;
       const clear = showStatus && showClear !== false ? monitorClearRect(screen, fontSize, lineHeight) : null;
       const statusH = showStatus ? lineHeight + 8 : 0;
-      const notice = activeShotNotice(player);
-      const noticeH = notice ? Math.min(13, fontSize) + 14 : 0;
-      const logY = screenY + pad + noticeH;
+      const logY = screenY + pad;
       const logBottom = screenY + screenH - (showStatus ? statusH + 4 : pad);
       const logH = Math.max(lineHeight, logBottom - logY);
       const maxWidth = Math.max(8, screenW - pad * 2);
@@ -5010,47 +5019,6 @@
         drawStatusLine(health, state, screenX + pad, barY + 6, fontSize, statusTextW);
         if (clear) drawClearButton(clear);
       }
-      if (notice) drawShotNotice(notice, screenX, screenY + pad, screenW, fontSize);
-      ctx.restore();
-    }
-
-    // The line stays up for a few seconds, then fades. Null once it is gone.
-    function activeShotNotice(player) {
-      const notice = player && player.shotNotice;
-      if (!notice || !notice.text || typeof notice.from !== "number") return null;
-      const age = frameTime - notice.from;
-      if (age < 0 || age >= SHOT_NOTICE_MS) return null;
-      const fade = 800;
-      const alpha = age > SHOT_NOTICE_MS - fade ? Math.max(0, (SHOT_NOTICE_MS - age) / fade) : 1;
-      return { text: notice.text, alpha: alpha };
-    }
-
-    // A short line above the status log.
-    function drawShotNotice(notice, screenX, screenY, screenW, maxFont) {
-      const alpha = notice.alpha;
-      ctx.save();
-      ctx.globalAlpha = alpha;
-      let size = Math.min(13, maxFont);
-      ctx.font = "bold " + size + "px monospace";
-      const maxW = Math.max(40, screenW - 24);
-      while (size > 10 && ctx.measureText(notice.text).width > maxW - 16) {
-        size -= 1;
-        ctx.font = "bold " + size + "px monospace";
-      }
-      const textW = ctx.measureText(notice.text).width;
-      const boxW = Math.min(maxW, textW + 16);
-      const boxH = size + 10;
-      const x = screenX + (screenW - boxW) / 2;
-      const y = screenY;
-      ctx.fillStyle = "rgba(8, 28, 16, 0.94)";
-      ctx.fillRect(x, y, boxW, boxH);
-      ctx.strokeStyle = COLOR_MONITOR_TEXT;
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x + 0.5, y + 0.5, boxW - 1, boxH - 1);
-      ctx.fillStyle = COLOR_MONITOR_TEXT;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(notice.text, x + boxW / 2, y + boxH / 2);
       ctx.restore();
     }
 

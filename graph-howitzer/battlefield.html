@@ -77,14 +77,13 @@
     const COLOR_AXIS = 0xff5555;
     const COLOR_P1 = 0x3d8bfd;
     const COLOR_P2 = 0xff8a3d;
-    const COLOR_BUILDING = 0x8a8a96;
-    const COLOR_TOWER = 0xc8c8d2;
+    const COLOR_OBSTACLE = 0x8a8a96;
     const GRID_METERS = 20;
     const OUTLINE_Y = 0.08;
     const SHAPE_Y = 0.14;
     const OUTLINE_PAD = 0.45;
     const SHELL_BLAST_RADIUS = 2.45; // meters. Same X circle the game uses for a blast.
-    const SHELL_DOT_RADIUS = 2.2;
+    const SHELL_DOT_RADIUS = 4.5; // meters. Visual only. Hit tests stay on the shell body.
 
     // Default camera looks from the near-right, so game +y is toward the top of the view
     // and the far-left corner (min x, max game y) sits at the top-left of the field.
@@ -400,7 +399,7 @@
       ctx2.fillStyle = "#14141e";
       traceShape(0);
       ctx2.fill();
-      ctx2.fillStyle = tower ? "#c8c8d2" : "#8a8a96";
+      ctx2.fillStyle = "#" + COLOR_OBSTACLE.toString(16);
       traceShape(Math.max(3, size * 0.035));
       ctx2.fill();
       const holes = obstacle.holes || [];
