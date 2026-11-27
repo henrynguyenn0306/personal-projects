@@ -226,7 +226,7 @@
     // A call, including its opening parenthesis, is one caret step.
     const FIRE_CARET_ATOMS = ["sqrt(", "sin(", "cos(", "tan(", "log(", "abs(", "ln(", "√("];
     const FIRE_FUNCTIONS = { sin: true, cos: true, tan: true, sqrt: true, log: true, ln: true, abs: true };
-    const STATE_PUBLISH_SECONDS = 0.1; // tell the viewer about 10 times a second
+    const STATE_PUBLISH_SECONDS = 1 / 30; // stream the viewer about 30 times a second
     // Gray and dark metal, like the rest of the console. Sizes below are fractions of the plate.
     const COLOR_JOYSTICK_PLATE = "#3a3a42";
     const COLOR_JOYSTICK_EDGE_LIGHT = "#6c6c78"; // top-left bevel
@@ -5177,7 +5177,13 @@
           canFire: true,
           aimX: aim.x,
           aimY: aim.y,
-          aimSet: true
+          aimSet: true,
+          heading: angle,
+          angle: angle,
+          targetAngle: angle,
+          turretBusy: false,
+          loaderLocked: false,
+          status: "Idle"
         };
         players.push(unit);
       }
@@ -5217,24 +5223,56 @@
     const battlefieldChannel = new BroadcastChannel(BATTLEFIELD_CHANNEL_NAME);
     let battlefieldDirty = false;
     let lastBattlefieldPublish = 0;
+    let lastBattlefieldStore = 0;
     let player1WasMoving = false;
     let player2WasMoving = false;
 
-    // Save the map and tell any open viewer tab. Call this again if the map changes.
-    function publishBattlefield() {
-      try {
-        localStorage.setItem(BATTLEFIELD_STORAGE_KEY, JSON.stringify(battlefield));
-      } catch (error) {
-        // The room still works if the browser blocks storage.
+    function travelHeading(vx, vy) {
+      let deg = Math.atan2(vy, vx) * 180 / Math.PI;
+      if (!isFinite(deg)) deg = 0;
+      if (deg < 0) deg += 360;
+      return deg;
+    }
+
+    // Copy the live machine onto the shared map. The room itself is not drawn from these fields.
+    function stampViewerFields() {
+      const owners = [player1, player2];
+      for (let i = 0; i < owners.length; i++) {
+        const player = owners[i];
+        const unit = battlefield.players[i];
+        if (!unit || !player) continue;
+        const speed = Math.hypot(unit.vx, unit.vy);
+        if (speed > MOVE_STATUS_SPEED) unit.heading = travelHeading(unit.vx, unit.vy);
+        else if (typeof unit.heading !== "number") unit.heading = player.actualAngle;
+        unit.angle = player.actualAngle;
+        unit.targetAngle = player.targetAngle;
+        unit.turretBusy = !!player.turretBusy;
+        unit.loaderLocked = !!player.loaderLocked;
+        unit.status = machineStateOf(player).text;
+      }
+    }
+
+    // Save the map and tell any open viewer tab. The channel carries every tick.
+    // Storage is the copy a tab can read the moment it opens.
+    function publishBattlefield(persist) {
+      stampViewerFields();
+      if (persist !== false) {
+        try {
+          localStorage.setItem(BATTLEFIELD_STORAGE_KEY, JSON.stringify(battlefield));
+        } catch (error) {
+          // The room still works if the browser blocks storage.
+        }
       }
       battlefieldChannel.postMessage({ type: "state", battlefield: battlefield });
     }
 
-    // Positions change every frame while driving. Send them about 10 times a second.
+    // Stream the full map at a steady rate, and immediately when a move just stopped.
     function flushBattlefield(time, force) {
-      if (!battlefieldDirty) return;
-      if (!force && time - lastBattlefieldPublish < STATE_PUBLISH_SECONDS * 1000) return;
-      publishBattlefield();
+      const due = force || time - lastBattlefieldPublish >= STATE_PUBLISH_SECONDS * 1000;
+      if (!due) return;
+      const persist = force || time - lastBattlefieldStore >= 250;
+      publishBattlefield(persist);
+      if (persist) lastBattlefieldStore = time;
       battlefieldDirty = false;
       lastBattlefieldPublish = time;
     }
