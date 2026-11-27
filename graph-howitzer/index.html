@@ -1219,10 +1219,8 @@
       ctx.fillStyle = COLOR_MONITOR_SCREEN;
       ctx.fillRect(screenX, screenY, screenW, screenH);
 
-      // The open status window has its own Clear. Drawing this one too leaves it
-      // above that window, outside the glass.
-      const statusWindow = player.panelOpen && player.panelKind === "monitor";
-      drawMessageList(player, screenX, screenY, screenW, screenH, MONITOR_FONT_SIZE, MONITOR_LINE_HEIGHT, !statusWindow, 0);
+      // Clear exists only on the opened status window, never on this room screen.
+      drawMessageList(player, screenX, screenY, screenW, screenH, MONITOR_FONT_SIZE, MONITOR_LINE_HEIGHT, false, 0);
       if (near && machineStarted) drawInteractOutline(rect);
     }
 
@@ -1628,15 +1626,6 @@
         ctx.fillStyle = "rgba(8, 8, 12, 0.45)";
         ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
       }
-      // Pressable face only. No station name and no indicator dot.
-      const facePad = Math.max(5, Math.min(rect.width, rect.height) * 0.16);
-      const face = {
-        x: rect.x + facePad,
-        y: rect.y + facePad,
-        width: rect.width - facePad * 2,
-        height: rect.height - facePad * 2
-      };
-      if (face.width > 8 && face.height > 8) drawBeveledRect(face);
       ctx.restore();
       if (near && machineStarted && usable) drawInteractOutline(rect);
     }
@@ -3537,7 +3526,7 @@
     }
 
     // Top-down field. No machines and no firing arcs.
-    function drawBattlefieldMap(box, withLabels, player) {
+    function drawBattlefieldMap(box, withLabels, player, showObstacles) {
       const plot = battlefieldMapPlot(box, withLabels);
       const spanX = FIELD_X_MAX * 2;
       const spanY = FIELD_Y_MAX * 2;
@@ -3567,32 +3556,34 @@
       }
       ctx.stroke();
 
-      // Obstacles inside the field. Anything past the map border stays clipped off.
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(plot.x, plot.y, plot.w, plot.h);
-      ctx.clip();
-      const obstacles = battlefield.obstacles || [];
-      for (let i = 0; i < obstacles.length; i++) {
-        const obstacle = obstacles[i];
-        if (obstacleOutsideField(obstacle)) continue;
-        const center = axisFromGame(obstacle.x, obstacle.y);
-        if (obstacle.type === "tower") {
-          const spot = mapPoint(plot, center.x, center.y);
-          const radius = Math.max(1, (obstacle.r || 2) / spanX * plot.w);
-          ctx.fillStyle = "#c8c8d2";
-          ctx.beginPath();
-          ctx.arc(spot.x, spot.y, radius, 0, Math.PI * 2);
-          ctx.fill();
-        } else {
-          const wide = obstacle.w || 6;
-          const deep = obstacle.h || 6;
-          const corner = mapPoint(plot, center.x - wide / 2, center.y - deep / 2);
-          ctx.fillStyle = "#8a8a96";
-          ctx.fillRect(corner.x, corner.y, wide / spanX * plot.w, deep / spanY * plot.h);
+      // The room map is the grid only. Obstacles are drawn on the opened map window.
+      if (showObstacles) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(plot.x, plot.y, plot.w, plot.h);
+        ctx.clip();
+        const obstacles = battlefield.obstacles || [];
+        for (let i = 0; i < obstacles.length; i++) {
+          const obstacle = obstacles[i];
+          if (obstacleOutsideField(obstacle)) continue;
+          const center = axisFromGame(obstacle.x, obstacle.y);
+          if (obstacle.type === "tower") {
+            const spot = mapPoint(plot, center.x, center.y);
+            const radius = Math.max(1, (obstacle.r || 2) / spanX * plot.w);
+            ctx.fillStyle = "#c8c8d2";
+            ctx.beginPath();
+            ctx.arc(spot.x, spot.y, radius, 0, Math.PI * 2);
+            ctx.fill();
+          } else {
+            const wide = obstacle.w || 6;
+            const deep = obstacle.h || 6;
+            const corner = mapPoint(plot, center.x - wide / 2, center.y - deep / 2);
+            ctx.fillStyle = "#8a8a96";
+            ctx.fillRect(corner.x, corner.y, wide / spanX * plot.w, deep / spanY * plot.h);
+          }
         }
+        ctx.restore();
       }
-      ctx.restore();
 
       ctx.strokeStyle = "rgba(216, 255, 228, 0.9)";
       ctx.lineWidth = withLabels ? 1.5 : 1;
@@ -3694,7 +3685,7 @@
         drawShellGraph(body.graph, player.equationTree, player.flight);
       }
       if (body.dial.width > 24 && body.dial.height > 24) drawTurretDial(body.dial, player, false);
-      if (body.map.width > 16 && body.map.height > 16) drawBattlefieldMap(body.map, false, null);
+      if (body.map.width > 16 && body.map.height > 16) drawBattlefieldMap(body.map, false, null, false);
       ctx.restore();
       if (!machineStarted) return;
       const hot = stationNearHand(player, room);
@@ -3827,7 +3818,7 @@
     }
 
     function drawMapZoom(player, view) {
-      drawBattlefieldMap(view.map, true, player);
+      drawBattlefieldMap(view.map, true, player, true);
     }
 
     function interactOutlineStyle() {
@@ -4137,20 +4128,22 @@
         return;
       }
 
-      // One origin: the player dot. Rings, crosshair, and the sweep share it.
-      // The screen clip above cuts anything that would leave the glass. The sweep
-      // angle runs a full turn around that dot.
-      const playerX = screenX + screenW - 16;
-      const playerY = screenY + screenH - 10;
+      // Scope matches the centered radar: rings, crosshair, sweep, and contacts
+      // share the glass center and the clip keeps them on the screen.
+      const centerX = screenX + screenW / 2;
+      const centerY = screenY + screenH / 2;
       const rangePx = Math.min(screenW, screenH) / 2;
-      drawRadarCrosshair(screenX, screenY, screenW, screenH, playerX, playerY);
-      drawRadarRangeRings(playerX, playerY, rangePx, showBlips);
-      if (showBlips) drawRadarBlips(playerX, playerY, rangePx, ownerIndex);
-      drawRadarSweep(playerX, playerY, rangePx);
+      if (!showBlips) drawRadarCrosshair(screenX, screenY, screenW, screenH, centerX, centerY);
+      if (showBlips) drawRadarBlips(centerX, centerY, rangePx, ownerIndex);
+      drawRadarSweep(centerX, centerY, rangePx);
+      drawRadarRangeRings(centerX, centerY, rangePx, showBlips);
 
+      // Player marker replaces the old bezel square, shifted left onto the glass.
+      const markerX = screenX + screenW - 16;
+      const markerY = screenY + screenH - 10;
       ctx.fillStyle = COLOR_RADAR_YOU;
       ctx.beginPath();
-      ctx.arc(playerX, playerY, showBlips ? 5 : 4, 0, Math.PI * 2);
+      ctx.arc(markerX, markerY, showBlips ? 5 : 4, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
     }
@@ -4516,13 +4509,6 @@
         if (!refuelUsable(player)) return;
         player.refueling = true;
         return;
-      }
-      if (kind === "monitor") {
-        const screen = monitorScreen(room);
-        if (pointInRect(player.x, player.y, monitorClearRect(screen))) {
-          clearMonitorLog(player);
-          return;
-        }
       }
       if (kind === "storage") {
         const well = storageWell(getStorageRect(room));
