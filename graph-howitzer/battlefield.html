@@ -373,8 +373,60 @@
         const obstacle = obstacles[i];
         text += "|" + obstacle.type + "," + obstacle.x + "," + obstacle.y;
         text += "," + (obstacle.w || 0) + "," + (obstacle.h || 0) + "," + (obstacle.r || 0);
+        text += ",h" + (obstacle.hits || 0);
+        const holes = obstacle.holes || [];
+        for (let h = 0; h < holes.length; h++) {
+          text += ":" + holes[h].x + "," + holes[h].y + "," + holes[h].r;
+        }
       }
       return text;
+    }
+
+    // A flat footprint. Blast holes are transparent so the ground shows through.
+    function obstacleMesh(obstacle) {
+      const tower = obstacle.type === "tower";
+      const wide = tower ? (obstacle.r || 2) * 2 : (obstacle.w || 6);
+      const deep = tower ? (obstacle.r || 2) * 2 : (obstacle.h || 6);
+      const canvas = document.createElement("canvas");
+      const size = 256;
+      canvas.width = size;
+      canvas.height = size;
+      const ctx2 = canvas.getContext("2d");
+      ctx2.clearRect(0, 0, size, size);
+      function traceShape(pad) {
+        ctx2.beginPath();
+        if (tower) ctx2.arc(size / 2, size / 2, size / 2 - pad, 0, Math.PI * 2);
+        else ctx2.rect(pad, pad, size - pad * 2, size - pad * 2);
+      }
+      ctx2.fillStyle = "#14141e";
+      traceShape(0);
+      ctx2.fill();
+      ctx2.fillStyle = tower ? "#c8c8d2" : "#8a8a96";
+      traceShape(Math.max(3, size * 0.035));
+      ctx2.fill();
+      const holes = obstacle.holes || [];
+      if (holes.length) {
+        ctx2.globalCompositeOperation = "destination-out";
+        for (let i = 0; i < holes.length; i++) {
+          const hole = holes[i];
+          const lx = hole.x - obstacle.x;
+          const ly = hole.y - obstacle.y;
+          const px = (lx + wide / 2) / wide * size;
+          const py = (deep / 2 - ly) / deep * size;
+          ctx2.beginPath();
+          ctx2.ellipse(px, py, Math.max(1, hole.r / wide * size), Math.max(1, hole.r / deep * size), 0, 0, Math.PI * 2);
+          ctx2.fill();
+        }
+      }
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(wide, deep),
+        new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false, side: THREE.DoubleSide })
+      );
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.y = SHAPE_Y;
+      return mesh;
     }
 
     function buildField() {
@@ -442,13 +494,9 @@
       for (let i = 0; i < obstacles.length; i++) {
         const obstacle = obstacles[i];
         if (obstacleOutsideField(obstacle)) continue;
-        let shape;
-        if (obstacle.type === "tower") {
-          shape = flatFootprint("circle", obstacle.r || 2, 0, COLOR_TOWER);
-        } else {
-          shape = flatFootprint("rect", obstacle.w || 6, obstacle.h || 6, COLOR_BUILDING);
-        }
-        shape.position.set(worldX(obstacle.x), 0, worldZ(obstacle.y));
+        const shape = obstacleMesh(obstacle);
+        shape.position.x = worldX(obstacle.x);
+        shape.position.z = worldZ(obstacle.y);
         obstaclesGroup.add(shape);
       }
     }
