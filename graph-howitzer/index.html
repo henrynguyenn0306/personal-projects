@@ -1955,7 +1955,7 @@
       }
     }
 
-    // A smaller FIRE-over-lock stack on the left, and a round bore in the space beside it.
+    // The bore stays where it is. FIRE sits on the lock and the pair fills the column beside it.
     function loaderParts(rect) {
       const pad = 8;
       const titleH = 16;
@@ -1964,25 +1964,27 @@
       const contentW = Math.max(40, rect.width - pad * 2);
       const contentH = Math.max(40, rect.height - pad - titleH - pad);
       const columnW = Math.round(Math.min(100, Math.max(72, contentW * 0.34)));
-      const fireH = Math.round(Math.min(46, Math.max(32, contentH * 0.2)));
-      const lockH = Math.round(Math.min(68, Math.max(48, contentH * 0.3)));
       const stackGap = 6;
-      const stackH = fireH + stackGap + lockH;
-      const stackY = contentY + Math.max(0, (contentH - stackH) / 2);
       const lane = Math.min(52, contentW * 0.2);
       const rightPad = 6;
       const boreRight = contentX + contentW - rightPad;
       const boreLeft = contentX + columnW + stackGap + lane;
       const diameter = Math.max(36, Math.min(boreRight - boreLeft, contentH - 10));
+      const hole = {
+        cx: boreRight - diameter / 2,
+        cy: contentY + contentH / 2,
+        r: diameter / 2,
+        laneX: contentX + columnW
+      };
+      const beside = 12;
+      const between = 8;
+      const controlsW = Math.max(48, hole.cx - hole.r - beside - contentX);
+      const fireH = Math.round((contentH - between) * 0.4);
+      const lockH = contentH - between - fireH;
       return {
-        fire: { x: contentX, y: stackY, width: columnW, height: fireH },
-        lock: { x: contentX, y: stackY + fireH + stackGap, width: columnW, height: lockH },
-        hole: {
-          cx: boreRight - diameter / 2,
-          cy: contentY + contentH / 2,
-          r: diameter / 2,
-          laneX: contentX + columnW
-        }
+        fire: { x: contentX, y: contentY, width: controlsW, height: fireH },
+        lock: { x: contentX, y: contentY + fireH + between, width: controlsW, height: lockH },
+        hole: hole
       };
     }
 
