@@ -1226,7 +1226,7 @@
     // Radar sits beside the monitor. Half of the square is RADAR_RANGE units.
     // The frame matches the monitor. Nearness is only the pulsing outline.
     // The screen stays black until H.O.W.L.E.R starts.
-    // The small radar shows the sweep and the center dot only. Blips stay hidden here.
+    // The small radar shows the sweep and the player dot only. Blips stay hidden here.
     // The hand passes over it; only the middle wall blocks movement.
     function drawRadar(room, player) {
       const rect = getRadarRect(room);
@@ -4098,15 +4098,17 @@
         return;
       }
 
-      // The player stays fixed: centered, three quarters of the way down the radar.
-      const playerX = screenX + screenW / 2;
-      const playerY = screenY + screenH * 0.75;
-      // Half of the shorter side is RADAR_RANGE. The ring and the sweep both use that.
+      // Rings and the crosshair sit in the middle of the screen. The player dot is the old
+      // corner square, nudged left, and the sweep and contacts start there.
+      const centerX = screenX + screenW / 2;
+      const centerY = screenY + screenH / 2;
+      const playerX = screenX + screenW - 16;
+      const playerY = screenY + screenH - 10;
       const rangePx = Math.min(screenW, screenH) / 2;
-      if (!showBlips) drawRadarCrosshair(screenX, screenY, screenW, screenH, playerX, playerY);
+      if (!showBlips) drawRadarCrosshair(screenX, screenY, screenW, screenH, centerX, centerY);
+      drawRadarRangeRings(centerX, centerY, rangePx, showBlips);
       if (showBlips) drawRadarBlips(playerX, playerY, rangePx, ownerIndex);
       drawRadarSweep(playerX, playerY, rangePx);
-      drawRadarRangeRings(playerX, playerY, rangePx, showBlips);
 
       ctx.fillStyle = COLOR_RADAR_YOU;
       ctx.beginPath();
@@ -4250,10 +4252,11 @@
     }
 
     function monitorClearRect(screen) {
-      const width = 46;
-      const height = 16;
+      ctx.font = "bold 12px sans-serif";
+      const width = ctx.measureText("Clear").width;
+      const height = 14;
       return {
-        x: screen.x + screen.width - width - 6,
+        x: screen.x + screen.width - width - 8,
         y: screen.y + 6,
         width: width,
         height: height
@@ -4265,16 +4268,11 @@
     }
 
     function drawClearButton(rect) {
-      ctx.fillStyle = "#142018";
-      ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
-      ctx.strokeStyle = "#39ff6a";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.width - 1, rect.height - 1);
       ctx.fillStyle = "#39ff6a";
-      ctx.font = "bold 11px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("Clear", rect.x + rect.width / 2, rect.y + rect.height / 2);
+      ctx.font = "bold 12px sans-serif";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      ctx.fillText("Clear", rect.x, rect.y);
     }
 
     // A long log line continues underneath instead of running off the screen.
@@ -4295,22 +4293,31 @@
     }
 
     function drawMessageList(player, screenX, screenY, screenW, screenH, fontSize, lineHeight) {
-      // Health and activity keep a strip at the bottom. Log lines stop above it.
-      const barH = machineStarted ? statusStripHeight(lineHeight) : 0;
+      // Log on top, then a rule, then health and activity. Clear sits in the top-right of the log.
+      const pad = 8;
       const screen = { x: screenX, y: screenY, width: screenW, height: screenH };
-      const clear = machineStarted ? monitorClearRect(screen) : null;
-      const logTop = clear ? clear.y + clear.height + 4 - screenY : 0;
-      const logH = Math.max(8, screenH - barH - logTop);
+      const showStatus = machineStarted;
+      const clear = showStatus ? monitorClearRect(screen) : null;
+      const statusH = showStatus ? lineHeight * 2 + 8 : 0;
+      const logY = screenY + pad;
+      const logBottom = screenY + screenH - (showStatus ? statusH + 4 : pad);
+      const logH = Math.max(lineHeight, logBottom - logY);
+      const textRight = clear ? clear.x - 8 : screenX + screenW - pad;
+      const maxWidth = Math.max(8, textRight - (screenX + pad));
 
       ctx.save();
       ctx.beginPath();
-      ctx.rect(screenX, screenY + logTop, screenW, logH);
+      ctx.rect(screenX, screenY, screenW, screenH);
+      ctx.clip();
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(screenX, logY, screenW, logH);
       ctx.clip();
       ctx.font = fontSize + "px monospace";
       ctx.textAlign = "left";
       ctx.textBaseline = "top";
-      const maxLines = Math.max(1, Math.floor((logH - 8) / lineHeight));
-      const maxWidth = Math.max(8, screenW - 16);
+      const maxLines = Math.max(1, Math.floor(logH / lineHeight));
       const wrapped = [];
       for (let i = 0; i < player.messages.length; i++) {
         const entry = player.messages[i];
@@ -4320,25 +4327,26 @@
       const start = Math.max(0, wrapped.length - maxLines);
       for (let i = start; i < wrapped.length; i++) {
         ctx.fillStyle = wrapped[i].color;
-        ctx.fillText(wrapped[i].text, screenX + 8, screenY + logTop + 4 + (i - start) * lineHeight);
+        ctx.fillText(wrapped[i].text, screenX + pad, logY + (i - start) * lineHeight);
       }
       ctx.restore();
 
-      if (!machineStarted) return;
-
-      const barY = screenY + screenH - barH;
-      ctx.strokeStyle = "rgba(242, 242, 247, 0.4)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(screenX + 6, barY + 1);
-      ctx.lineTo(screenX + screenW - 6, barY + 1);
-      ctx.stroke();
-      const textW = Math.max(8, screenW - 16);
-      const health = healthStatusOf(healthPercent(player));
-      const state = machineStateOf(player);
-      drawLabeledLine("Status: ", health.name + " (" + health.percent + "%)", health.color, screenX + 8, barY + 5, fontSize, textW);
-      drawLabeledLine("State: ", state.text, state.color, screenX + 8, barY + 5 + lineHeight, fontSize, textW);
-      drawClearButton(clear);
+      if (showStatus) {
+        const barY = screenY + screenH - statusH;
+        ctx.strokeStyle = "rgba(242, 242, 247, 0.4)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(screenX + pad, barY);
+        ctx.lineTo(screenX + screenW - pad, barY);
+        ctx.stroke();
+        const textW = Math.max(8, screenW - pad * 2);
+        const health = healthStatusOf(healthPercent(player));
+        const state = machineStateOf(player);
+        drawLabeledLine("Status: ", health.name + " (" + health.percent + "%)", health.color, screenX + pad, barY + 6, fontSize, textW);
+        drawLabeledLine("State: ", state.text, state.color, screenX + pad, barY + 6 + lineHeight, fontSize, textW);
+        drawClearButton(clear);
+      }
+      ctx.restore();
     }
 
     function getZoomRect(room) {
