@@ -2002,24 +2002,39 @@
       ctx.restore();
     }
 
+    function mixBoreColor(from, to, t) {
+      const r = Math.round(from[0] + (to[0] - from[0]) * t);
+      const g = Math.round(from[1] + (to[1] - from[1]) * t);
+      const b = Math.round(from[2] + (to[2] - from[2]) * t);
+      return "rgb(" + r + "," + g + "," + b + ")";
+    }
+
+    // Base of the shell, seen straight into the bore. It starts filling the hole, then recedes.
+    function drawShellBaseInBore(hole, t) {
+      const eased = t * t * (3 - 2 * t);
+      const radius = hole.r * (0.86 - 0.28 * eased);
+      const black = [5, 6, 5];
+      ctx.save();
+      ctx.globalAlpha = 1 - eased;
+      ctx.beginPath();
+      ctx.arc(hole.cx, hole.cy, radius, 0, Math.PI * 2);
+      ctx.fillStyle = mixBoreColor([196, 154, 78], black, eased);
+      ctx.fill();
+      ctx.lineWidth = Math.max(1.5, radius * 0.07);
+      ctx.strokeStyle = mixBoreColor([110, 78, 40], black, eased);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(hole.cx, hole.cy, radius * 0.22, 0, Math.PI * 2);
+      ctx.fillStyle = mixBoreColor([74, 52, 28], black, eased);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(hole.cx, hole.cy, radius * 0.08, 0, Math.PI * 2);
+      ctx.fillStyle = mixBoreColor([36, 24, 14], black, eased);
+      ctx.fill();
+      ctx.restore();
+    }
+
     function drawLoaderHole(hole, player) {
-      if (machineStarted) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(hole.laneX, hole.cy - hole.r - 16, hole.cx + hole.r + 8 - hole.laneX, hole.r * 2 + 32);
-        ctx.clip();
-        for (let i = 0; i < player.loaderSlots.length; i++) {
-          const slot = player.loaderSlots[i];
-          if (!slot || slot.ready) continue;
-          const t = Math.max(0, Math.min(1, slot.t));
-          if (t >= 0.98) continue;
-          const length = Math.min(hole.r * 1.15, 54);
-          const x0 = hole.cx - hole.r - length / 2;
-          const x = x0 + (hole.r + length / 2) * t;
-          drawShellGlyph(x, hole.cy, length, 0);
-        }
-        ctx.restore();
-      }
       ctx.save();
       ctx.beginPath();
       ctx.arc(hole.cx, hole.cy, hole.r, 0, Math.PI * 2);
@@ -2029,6 +2044,15 @@
       shade.addColorStop(1, "#050605");
       ctx.fillStyle = shade;
       ctx.fillRect(hole.cx - hole.r - 2, hole.cy - hole.r - 2, hole.r * 2 + 4, hole.r * 2 + 4);
+      if (machineStarted) {
+        for (let i = 0; i < player.loaderSlots.length; i++) {
+          const slot = player.loaderSlots[i];
+          if (!slot || slot.ready) continue;
+          const t = Math.max(0, Math.min(1, slot.t));
+          if (t >= 0.995) continue;
+          drawShellBaseInBore(hole, t);
+        }
+      }
       ctx.restore();
       ctx.beginPath();
       ctx.arc(hole.cx, hole.cy, hole.r, 0, Math.PI * 2);
