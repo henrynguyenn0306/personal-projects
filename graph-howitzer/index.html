@@ -182,7 +182,9 @@
     const SHELL_MAX_SPEED = 80;
     const SHELL_DAMAGE_PER_MPS = 2; // stored damage, applied when the blast overlaps the opponent
     const SHELL_BODY_RADIUS = 0.08; // the shell dot. In-air contact with the opponent uses this, not the blast.
-    const SHELL_BLAST_RADIUS = 0.8; // meters. X circle, ground check, damage, and carving.
+    const SHELL_BLAST_RADIUS = 2.45; // meters. X circle, ground check, damage, and carving.
+    const HINT_RANGE = 50; // meters. A ground impact inside this range of the opponent keeps a distance hint.
+    const SHOT_NOTICE_MS = 4000; // how long the status pop-up stays up, including its fade.
     const SHELL_OBSTACLE_HITS = 3; // a third blast removes the obstacle
     const SHELL_EXPLOSION_SECONDS = 0.8;
     const SHELL_STORAGE_COUNT = 8;
@@ -260,8 +262,8 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "", shells: SHELL_STORAGE_COUNT, storageSlots: [true, true, true, true, true, true, true, true], carryingShell: false, storageClosedAt: null, hatch: 0, loaderSlots: [null, null, null], loaderLocked: false, loaderCover: 0, loaderLever: 0, loaderRecoverUntil: 0, statusNotice: "" };
-    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "", shells: SHELL_STORAGE_COUNT, storageSlots: [true, true, true, true, true, true, true, true], carryingShell: false, storageClosedAt: null, hatch: 0, loaderSlots: [null, null, null], loaderLocked: false, loaderCover: 0, loaderLever: 0, loaderRecoverUntil: 0, statusNotice: "" };
+    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "", shells: SHELL_STORAGE_COUNT, storageSlots: [true, true, true, true, true, true, true, true], carryingShell: false, storageClosedAt: null, hatch: 0, loaderSlots: [null, null, null], loaderLocked: false, loaderCover: 0, loaderLever: 0, loaderRecoverUntil: 0, statusNotice: "", attackMarks: [], mapMark: -1, shotNotice: null };
+    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "", shells: SHELL_STORAGE_COUNT, storageSlots: [true, true, true, true, true, true, true, true], carryingShell: false, storageClosedAt: null, hatch: 0, loaderSlots: [null, null, null], loaderLocked: false, loaderCover: 0, loaderLever: 0, loaderRecoverUntil: 0, statusNotice: "", attackMarks: [], mapMark: -1, shotNotice: null };
     const fallingShells = [];
     const liveShells = [];
 
@@ -2187,6 +2189,50 @@
       const outcome = applyBlast(shell);
       const player = shell.owner === 0 ? player1 : player2;
       addStatusMessage(player, shellImpactLine(reason, shell, outcome));
+      const onGround = reason === "ground" || (reason === "end of path" && shell.height <= 0.05);
+      if (onGround) addGroundMark(player, shell);
+      showShotNotice(player, shotNoticeText(reason, shell, outcome, onGround));
+    }
+
+    // Distance is frozen when the shell lands. Later movement does not change the mark.
+    function groundHintValue(shell) {
+      const enemy = battlefield.players[1 - shell.owner];
+      if (!enemy) return "Too far";
+      const dist = Math.hypot(enemy.x - shell.blast.x, enemy.y - shell.blast.y);
+      if (dist > HINT_RANGE) return "Too far";
+      return Math.round(dist) + " m";
+    }
+
+    function addGroundMark(player, shell) {
+      if (!player.attackMarks) player.attackMarks = [];
+      const axis = axisFromGame(shell.blast.x, shell.blast.y);
+      player.attackMarks.push({ x: axis.x, y: axis.y, hint: groundHintValue(shell) });
+    }
+
+    function shotNoticeText(reason, shell, outcome, onGround) {
+      if (outcome.opponent) return "Target hit! -" + shell.damage + " HP";
+      let destroyed = false;
+      let hits = 0;
+      for (let i = 0; i < outcome.obstacles.length; i++) {
+        const note = outcome.obstacles[i];
+        if (note.destroyed) destroyed = true;
+        if (note.hits > hits) hits = note.hits;
+      }
+      if (destroyed) return "Obstacle destroyed";
+      if (hits > 0) return "Obstacle hit (" + hits + "/" + SHELL_OBSTACLE_HITS + ")";
+      if (reason === "border") return "Shell hit the border";
+      if (!onGround) return "";
+      const hint = groundHintValue(shell);
+      if (hint === "Too far") return "Hint: too far";
+      return "Hint: opponent ~" + hint.replace(" m", "") + " m away";
+    }
+
+    function showShotNotice(player, text) {
+      if (!text) {
+        player.shotNotice = null;
+        return;
+      }
+      player.shotNotice = { text: text, from: frameTime };
     }
 
     function pathPoint(shell, seg, t) {
@@ -3976,9 +4022,7 @@
       };
     }
 
-    // Future attack marks. Each one will be { x, y } in axis meters.
-    // A press on a mark shows its distance, and a delete button removes it.
-    // The list stays empty until that is built.
+    // Ground impacts for this match. x and y are axis meters. hint is frozen at impact.
     function attackMarksOf(player) {
       if (!player || !player.attackMarks) return [];
       return player.attackMarks;
@@ -3986,12 +4030,35 @@
 
     function drawAttackMarks(plot, player) {
       const marks = attackMarksOf(player);
+      const selected = player ? player.mapMark : -1;
       for (let i = 0; i < marks.length; i++) {
         const spot = mapPoint(plot, marks[i].x, marks[i].y);
-        ctx.fillStyle = "#ffb020";
+        const hot = i === selected;
+        const radius = Math.max(3.5, plot.w * 0.012) + (hot ? 1.5 : 0);
+        ctx.fillStyle = hot ? "#ffe14a" : "#ffb020";
         ctx.beginPath();
-        ctx.arc(spot.x, spot.y, Math.max(3, plot.w * 0.012), 0, Math.PI * 2);
+        ctx.arc(spot.x, spot.y, radius, 0, Math.PI * 2);
         ctx.fill();
+        ctx.strokeStyle = "#1a1206";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        if (!hot || !marks[i].hint) continue;
+        ctx.font = "12px monospace";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        const text = marks[i].hint;
+        const textW = ctx.measureText(text).width;
+        let labelX = spot.x + radius + 6;
+        let labelY = spot.y;
+        if (labelX + textW + 8 > plot.x + plot.w) labelX = spot.x - radius - textW - 14;
+        if (labelY - 9 < plot.y) labelY = plot.y + 10;
+        if (labelY + 9 > plot.y + plot.h) labelY = plot.y + plot.h - 10;
+        ctx.fillStyle = "rgba(4, 16, 10, 0.94)";
+        ctx.fillRect(labelX - 4, labelY - 9, textW + 8, 18);
+        ctx.strokeStyle = "#ffb020";
+        ctx.strokeRect(labelX - 3.5, labelY - 8.5, textW + 7, 17);
+        ctx.fillStyle = "#ffe14a";
+        ctx.fillText(text, labelX, labelY);
       }
     }
 
@@ -4881,7 +4948,9 @@
       const showStatus = machineStarted;
       const clear = showStatus && showClear !== false ? monitorClearRect(screen, fontSize, lineHeight) : null;
       const statusH = showStatus ? lineHeight * 2 + 8 : 0;
-      const logY = screenY + pad;
+      const notice = activeShotNotice(player);
+      const noticeH = notice ? Math.min(13, fontSize) + 14 : 0;
+      const logY = screenY + pad + noticeH;
       const logBottom = screenY + screenH - (showStatus ? statusH + 4 : pad);
       const logH = Math.max(lineHeight, logBottom - logY);
       const maxWidth = Math.max(8, screenW - pad * 2);
@@ -4928,6 +4997,47 @@
         drawLabeledLine("State: ", state.text, state.color, screenX + pad, barY + 6 + lineHeight, fontSize, textW);
         if (clear) drawClearButton(clear);
       }
+      if (notice) drawShotNotice(notice, screenX, screenY + pad, screenW, fontSize);
+      ctx.restore();
+    }
+
+    // The line stays up for a few seconds, then fades. Null once it is gone.
+    function activeShotNotice(player) {
+      const notice = player && player.shotNotice;
+      if (!notice || !notice.text || typeof notice.from !== "number") return null;
+      const age = frameTime - notice.from;
+      if (age < 0 || age >= SHOT_NOTICE_MS) return null;
+      const fade = 800;
+      const alpha = age > SHOT_NOTICE_MS - fade ? Math.max(0, (SHOT_NOTICE_MS - age) / fade) : 1;
+      return { text: notice.text, alpha: alpha };
+    }
+
+    // A short line above the status log.
+    function drawShotNotice(notice, screenX, screenY, screenW, maxFont) {
+      const alpha = notice.alpha;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      let size = Math.min(13, maxFont);
+      ctx.font = "bold " + size + "px monospace";
+      const maxW = Math.max(40, screenW - 24);
+      while (size > 10 && ctx.measureText(notice.text).width > maxW - 16) {
+        size -= 1;
+        ctx.font = "bold " + size + "px monospace";
+      }
+      const textW = ctx.measureText(notice.text).width;
+      const boxW = Math.min(maxW, textW + 16);
+      const boxH = size + 10;
+      const x = screenX + (screenW - boxW) / 2;
+      const y = screenY;
+      ctx.fillStyle = "rgba(8, 28, 16, 0.94)";
+      ctx.fillRect(x, y, boxW, boxH);
+      ctx.strokeStyle = COLOR_MONITOR_TEXT;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, y + 0.5, boxW - 1, boxH - 1);
+      ctx.fillStyle = COLOR_MONITOR_TEXT;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(notice.text, x + boxW / 2, y + boxH / 2);
       ctx.restore();
     }
 
@@ -5130,13 +5240,12 @@
       if (pointInRect(tip.x, tip.y, equation)) player.caret = caretFromPoint(player, tip.x, equation);
     }
 
-    // Read-only until attack marks exist. A press on a future mark is the hook.
+    // A press on a ground mark shows the distance stored when that shell landed.
     function pressMapWindow(player, room) {
       const box = zoomContent(room, "map").map;
       if (!box) return;
       const plot = battlefieldMapPlot(box, true);
-      const index = attackMarkUnderPoint(plot, player, player.pointX, player.pointY);
-      if (index < 0) return;
+      player.mapMark = attackMarkUnderPoint(plot, player, player.pointX, player.pointY);
     }
 
     // Screen area inside a zoom frame. Fire, turret, and map each fill that same frame.
