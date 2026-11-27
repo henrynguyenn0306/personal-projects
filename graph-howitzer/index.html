@@ -251,8 +251,8 @@
     const keys = {};
 
     // Hands start at 0. The first resize places them in the middle of each room.
-    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "", shells: SHELL_STORAGE_COUNT, carryingShell: false, storageClosedAt: null, hatch: 0, loaderSlots: [null, null, null], loaderLocked: false, loaderCover: 0, loaderRecoverUntil: 0, statusNotice: "" };
-    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "", shells: SHELL_STORAGE_COUNT, carryingShell: false, storageClosedAt: null, hatch: 0, loaderSlots: [null, null, null], loaderLocked: false, loaderCover: 0, loaderRecoverUntil: 0, statusNotice: "" };
+    const player1 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "", shells: SHELL_STORAGE_COUNT, carryingShell: false, storageClosedAt: null, hatch: 0, loaderSlots: [null, null, null], loaderLocked: false, loaderCover: 0, loaderLever: 0, loaderRecoverUntil: 0, statusNotice: "" };
+    const player2 = { x: 0, y: 0, placed: false, messages: [], panelOpen: false, panelKind: "", gripping: false, holdingStart: false, refueling: false, tiltX: 0, tiltY: 0, condition: "Intact", activity: "Idle", equation: FIRE_DEFAULT_EQUATION, equationParsedFor: null, equationTree: null, equationError: "", equationErrorAt: -1, caret: FIRE_DEFAULT_EQUATION.length, canFire: true, fireOpen: false, fireIndex: 0, targetAngle: 0, actualAngle: 0, turretBusy: false, turretLogLine: null, dialDrag: false, dialHover: "", shells: SHELL_STORAGE_COUNT, carryingShell: false, storageClosedAt: null, hatch: 0, loaderSlots: [null, null, null], loaderLocked: false, loaderCover: 0, loaderLever: 0, loaderRecoverUntil: 0, statusNotice: "" };
     const fallingShells = [];
 
     // The wall sits in the middle. Each player owns one side of it.
@@ -1869,7 +1869,7 @@
         return true;
       }
       player.carryingShell = false;
-      player.loaderSlots[index] = { t: 0, ready: false, slide: 1 };
+      player.loaderSlots[index] = { t: 0, ready: false };
       if (player.statusNotice === "Max capacity") player.statusNotice = "";
       addStatusMessage(player, "> Loader: Shell inserted.");
       return true;
@@ -1877,15 +1877,13 @@
 
     function updateLoader(player, dt) {
       if (!machineStarted) return;
-      const coverWant = player.loaderLocked ? 1 : 0;
-      const coverStep = dt / 0.28;
-      if (player.loaderCover < coverWant) player.loaderCover = Math.min(1, player.loaderCover + coverStep);
-      else if (player.loaderCover > coverWant) player.loaderCover = Math.max(0, player.loaderCover - coverStep);
+      const leverWant = player.loaderLocked ? 1 : 0;
+      const leverStep = dt / 0.42;
+      if (player.loaderLever < leverWant) player.loaderLever = Math.min(1, player.loaderLever + leverStep);
+      else if (player.loaderLever > leverWant) player.loaderLever = Math.max(0, player.loaderLever - leverStep);
       for (let i = 0; i < player.loaderSlots.length; i++) {
         const slot = player.loaderSlots[i];
-        if (!slot) continue;
-        if (slot.slide > 0) slot.slide = Math.max(0, slot.slide - dt / 0.45);
-        if (slot.ready) continue;
+        if (!slot || slot.ready) continue;
         slot.t += dt / LOADER_LOAD_SECONDS;
         if (slot.t >= 1) {
           slot.t = 1;
@@ -1916,9 +1914,9 @@
       return frameTime < player.loaderRecoverUntil;
     }
 
-    // Lit only while the breech is locked, the equation can fire, and the gun is not recovering.
+    // Red while the breech is locked and the gun is not recovering from a shot.
     function loaderFireLit(player) {
-      return machineStarted && player.loaderLocked && !!player.canFire && !loaderRecovering(player);
+      return machineStarted && player.loaderLocked && !loaderRecovering(player);
     }
 
     function compactLoaderSlots(player) {
@@ -1936,11 +1934,12 @@
         addStatusMessage(player, "> Loader: Recovering.");
         return;
       }
-      if (!loaderFireLit(player)) return;
+      if (!player.loaderLocked) return;
       if (loaderReadySlot(player) < 0) return;
-      if (player.turretBusy) {
-        player.statusNotice = "Cannot fire: turret turning";
-        addStatusMessage(player, "> Loader: Cannot fire: turret turning.");
+      const reason = fireBlockReason(player);
+      if (reason) {
+        player.statusNotice = reason;
+        addStatusMessage(player, "> Loader: " + reason + ".");
         return;
       }
       const index = loaderReadySlot(player);
@@ -1956,160 +1955,104 @@
       }
     }
 
-    // A sideways chamber across the plate. The only insert port is its right end.
-    // The big lock handle and FIRE sit side by side under the chamber.
+    // The lever keeps its place at the bottom of the left column. FIRE sits on top of it.
+    // Everything else on the plate is the insert hole.
     function loaderParts(rect) {
       const pad = 8;
       const titleH = 16;
       const gap = 8;
       let controlH = Math.round(Math.min(120, Math.max(84, rect.height * 0.44)));
-      let chamberH = rect.height - pad * 2 - titleH - gap - controlH;
-      if (chamberH < 58) {
-        chamberH = 58;
-        controlH = Math.max(64, rect.height - pad * 2 - titleH - gap - chamberH);
+      let aboveH = rect.height - pad * 2 - titleH - gap - controlH;
+      if (aboveH < 58) {
+        aboveH = 58;
+        controlH = Math.max(64, rect.height - pad * 2 - titleH - gap - aboveH);
       }
-      const chamber = {
-        x: rect.x + pad,
-        y: rect.y + pad + titleH,
-        width: Math.max(24, rect.width - pad * 2),
-        height: chamberH
+      const contentW = Math.max(24, rect.width - pad * 2);
+      const leverW = Math.round(contentW * 0.56);
+      const columnX = rect.x + pad;
+      const columnY = rect.y + pad + titleH;
+      const lock = {
+        x: columnX,
+        y: columnY + aboveH + gap,
+        width: leverW,
+        height: controlH
       };
-      const portW = Math.min(46, Math.max(32, chamber.width * 0.16));
-      const rowW = Math.max(12, chamber.width - portW);
-      const slotW = rowW / LOADER_SLOT_COUNT;
-      const slots = [];
-      for (let i = 0; i < LOADER_SLOT_COUNT; i++) {
-        slots.push({
-          x: chamber.x + i * slotW,
-          y: chamber.y,
-          width: slotW,
-          height: chamber.height
-        });
-      }
-      const controlsY = chamber.y + chamber.height + gap;
-      const leverW = Math.round(chamber.width * 0.56);
+      const holeLeft = columnX + leverW + gap;
+      const holeTop = columnY;
+      const holeW = Math.max(16, rect.x + rect.width - pad - holeLeft);
+      const holeH = Math.max(16, lock.y + lock.height - holeTop);
       return {
-        chamber: chamber,
-        slots: slots,
-        port: { x: chamber.x + rowW, y: chamber.y, width: portW, height: chamber.height },
-        lock: { x: rect.x + pad, y: controlsY, width: leverW, height: controlH },
-        fire: {
-          x: rect.x + pad + leverW + gap,
-          y: controlsY,
-          width: Math.max(24, chamber.width - leverW - gap),
-          height: controlH
+        lock: lock,
+        fire: { x: columnX, y: columnY, width: leverW, height: aboveH },
+        hole: {
+          cx: holeLeft + holeW / 2,
+          cy: holeTop + holeH / 2,
+          rx: Math.max(8, holeW / 2 - 4),
+          ry: Math.max(8, holeH / 2 - 4)
         }
       };
     }
 
-    function drawLoaderPort(port) {
-      ctx.fillStyle = "#070908";
-      ctx.fillRect(port.x, port.y, port.width, port.height);
-      ctx.strokeStyle = "#8d8d98";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(port.x + 3.5, port.y + 5, port.width - 7, port.height - 10);
-      const cx = port.x + port.width / 2;
-      const cy = port.y + port.height / 2;
-      const radius = Math.min(port.width * 0.28, port.height * 0.18);
-      ctx.fillStyle = "#000000";
-      ctx.beginPath();
-      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = "#c8c8d2";
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-      ctx.strokeStyle = "#5c5c66";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(port.x + 6, cy - radius - 6);
-      ctx.lineTo(cx - radius - 2, cy);
-      ctx.lineTo(port.x + 6, cy + radius + 6);
-      ctx.stroke();
+    function handOverLoaderHole(player, hole) {
+      const nx = (player.x - hole.cx) / hole.rx;
+      const ny = (player.y - hole.cy) / hole.ry;
+      return nx * nx + ny * ny <= 1;
     }
 
-    function drawLoaderChamber(parts, player) {
-      const chamber = parts.chamber;
-      ctx.fillStyle = machineStarted ? "#10140f" : "#000000";
-      ctx.fillRect(chamber.x, chamber.y, chamber.width, chamber.height);
-      ctx.strokeStyle = "rgba(216, 255, 228, 0.28)";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(chamber.x + 0.5, chamber.y + 0.5, chamber.width - 1, chamber.height - 1);
-      ctx.strokeStyle = "rgba(216, 255, 228, 0.14)";
-      for (let i = 1; i < parts.slots.length; i++) {
-        const x = parts.slots[i].x;
-        ctx.beginPath();
-        ctx.moveTo(x, chamber.y + 5);
-        ctx.lineTo(x, chamber.y + chamber.height - 5);
-        ctx.stroke();
-      }
-      const rail = 3;
-      ctx.fillStyle = "#2a2e32";
-      ctx.fillRect(chamber.x + 3, chamber.y + 4, chamber.width - parts.port.width - 6, rail);
-      ctx.fillRect(chamber.x + 3, chamber.y + chamber.height - 7, chamber.width - parts.port.width - 6, rail);
-      drawLoaderPort(parts.port);
+    // Same center and radii as the drawn bore, a few pixels outside the rim.
+    function drawHoleHighlight(hole) {
+      ctx.save();
+      interactOutlineStyle();
+      ctx.beginPath();
+      ctx.ellipse(hole.cx, hole.cy, hole.rx + 3, hole.ry + 3, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawLoaderHole(hole, player) {
       ctx.save();
       ctx.beginPath();
-      ctx.rect(chamber.x, chamber.y, chamber.width, chamber.height);
+      ctx.ellipse(hole.cx, hole.cy, hole.rx, hole.ry, 0, 0, Math.PI * 2);
       ctx.clip();
-      for (let i = 0; i < parts.slots.length; i++) {
-        const slotRect = parts.slots[i];
-        const slot = machineStarted ? player.loaderSlots[i] : null;
-        const barH = 7;
-        const barX = slotRect.x + 5;
-        const barY = slotRect.y + slotRect.height - barH - 12;
-        const barW = Math.max(4, slotRect.width - 10);
-        if (slot) {
-          ctx.fillStyle = "#1c241c";
-          ctx.fillRect(barX, barY, barW, barH);
-          ctx.fillStyle = slot.ready ? "#39ff6a" : "#ffb020";
-          ctx.fillRect(barX, barY, barW * Math.min(1, slot.t), barH);
-        }
-        if (!slot) continue;
-        const slide = slot.slide > 0 ? slot.slide : 0;
-        const homeX = slotRect.x + slotRect.width / 2;
-        const portX = parts.port.x + parts.port.width / 2;
-        const x = homeX + (portX - homeX) * slide;
-        const shellTop = slotRect.y + (slot.ready ? 18 : 10);
-        const shellRoom = Math.max(10, barY - shellTop);
-        const length = Math.min(slotRect.width * 0.86, shellRoom / 0.34);
-        const y = shellTop + shellRoom / 2;
-        drawShellGlyph(x, y, Math.max(16, length), 0);
-        if (slot.ready && slide === 0) {
-          ctx.fillStyle = COLOR_MONITOR_TEXT;
-          ctx.font = "bold 10px sans-serif";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.fillText("READY", homeX, slotRect.y + 12);
-        }
-      }
+      const shade = ctx.createRadialGradient(hole.cx, hole.cy - hole.ry * 0.2, hole.rx * 0.15, hole.cx, hole.cy, Math.max(hole.rx, hole.ry));
+      shade.addColorStop(0, "#121614");
+      shade.addColorStop(1, "#050605");
+      ctx.fillStyle = shade;
+      ctx.fillRect(hole.cx - hole.rx - 2, hole.cy - hole.ry - 2, hole.rx * 2 + 4, hole.ry * 2 + 4);
       ctx.restore();
-      drawLoaderCover(parts, player.loaderCover || 0);
-    }
-
-    // Flat shutter. Closed, it hides the row; the insert port stays in view.
-    function drawLoaderCover(parts, amount) {
-      if (amount <= 0.02) return;
-      const row = parts.slots[0];
-      const width = parts.port.x - row.x;
-      const height = row.height * amount;
-      ctx.fillStyle = "#6a6e76";
-      ctx.fillRect(row.x, row.y, width, height);
+      ctx.beginPath();
+      ctx.ellipse(hole.cx, hole.cy, hole.rx, hole.ry, 0, 0, Math.PI * 2);
+      ctx.strokeStyle = "#1a1a1e";
+      ctx.lineWidth = 7;
+      ctx.stroke();
+      ctx.strokeStyle = "#c4c4cc";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.ellipse(hole.cx, hole.cy, hole.rx * 0.9, hole.ry * 0.9, 0, 0, Math.PI * 2);
       ctx.strokeStyle = "#000000";
       ctx.lineWidth = 2;
-      ctx.strokeRect(row.x + 1, row.y + 1, width - 2, Math.max(2, height - 2));
-      if (height > 16) {
-        ctx.beginPath();
-        ctx.moveTo(row.x + 8, row.y + height * 0.45);
-        ctx.lineTo(row.x + width - 8, row.y + height * 0.45);
-        ctx.moveTo(row.x + 8, row.y + height * 0.72);
-        ctx.lineTo(row.x + width - 8, row.y + height * 0.72);
-        ctx.stroke();
+      ctx.stroke();
+      if (!machineStarted) return;
+      for (let i = 0; i < player.loaderSlots.length; i++) {
+        const slot = player.loaderSlots[i];
+        if (!slot || slot.ready) continue;
+        const t = Math.max(0, Math.min(1, slot.t));
+        if (t >= 0.98) continue;
+        const length = Math.min(hole.rx * 1.35, 64) * (1 - t * 0.82);
+        const y = hole.cy - hole.ry * (1 - t) * 0.72;
+        drawShellGlyph(hole.cx, y, Math.max(8, length), Math.PI / 2);
       }
     }
 
     function drawLockRod(x, top, width, bottom) {
       const radius = width / 2;
       const y2 = Math.max(top + width, bottom);
+      const shade = ctx.createLinearGradient(x, 0, x + width, 0);
+      shade.addColorStop(0, "#3a3a3a");
+      shade.addColorStop(0.4, "#141414");
+      shade.addColorStop(1, "#050505");
+      ctx.fillStyle = shade;
       ctx.beginPath();
       ctx.arc(x + radius, top + radius, radius, Math.PI, 0);
       ctx.lineTo(x + width, y2 - radius);
@@ -2118,37 +2061,53 @@
       ctx.fill();
     }
 
-    // Gray handle, two black rods, gray base. Raised is unlocked; pushed down is locked.
-    function drawLockLever(rect, locked) {
-      const baseH = Math.max(28, rect.height * 0.4);
+    // Gray handle on two black rods into a gray base. 0 is raised, 1 is pushed down.
+    function drawLockLever(rect, pose) {
+      const amount = pose * pose * (3 - 2 * pose);
+      const baseH = Math.max(28, rect.height * 0.42);
       const baseW = rect.width * 0.86;
       const baseX = rect.x + (rect.width - baseW) / 2;
       const baseY = rect.y + rect.height - baseH;
-      const handleH = Math.max(12, rect.height * 0.16);
+      const handleH = Math.max(12, rect.height * 0.15);
       const handleW = baseW * 0.92;
       const handleX = rect.x + (rect.width - handleW) / 2;
-      const handleY = locked ? baseY - handleH - 7 : rect.y + 2;
-      ctx.fillStyle = "#8e8e96";
+      const raisedY = rect.y + 2;
+      const loweredY = baseY - handleH - 6;
+      const handleY = raisedY + (loweredY - raisedY) * amount;
+      const baseShade = ctx.createLinearGradient(baseX, baseY, baseX, baseY + baseH);
+      baseShade.addColorStop(0, "#c2c2ca");
+      baseShade.addColorStop(0.2, "#8e8e96");
+      baseShade.addColorStop(1, "#5c5c64");
+      ctx.fillStyle = baseShade;
       ctx.fillRect(baseX, baseY, baseW, baseH);
+      ctx.fillStyle = "rgba(0, 0, 0, 0.16)";
+      ctx.fillRect(baseX + 7, baseY + baseH * 0.46, baseW - 14, baseH * 0.36);
       ctx.strokeStyle = "#000000";
       ctx.lineWidth = 2;
       ctx.strokeRect(baseX + 1, baseY + 1, baseW - 2, baseH - 2);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.38)";
+      ctx.fillRect(baseX + 2, baseY + 2, baseW - 4, 3);
       const rodW = Math.max(8, rect.width * 0.1);
-      const rodTop = handleY + handleH * 0.55;
-      const rodBottom = baseY + baseH * 0.58;
-      ctx.fillStyle = "#111111";
+      const rodTop = handleY + handleH * 0.42;
+      const rodBottom = baseY + baseH * 0.55;
       drawLockRod(handleX + handleW * 0.22, rodTop, rodW, rodBottom);
       drawLockRod(handleX + handleW * 0.78 - rodW, rodTop, rodW, rodBottom);
-      ctx.fillStyle = "#9a9aa3";
+      const handleShade = ctx.createLinearGradient(handleX, handleY, handleX, handleY + handleH);
+      handleShade.addColorStop(0, "#d8d8de");
+      handleShade.addColorStop(0.5, "#9a9aa3");
+      handleShade.addColorStop(1, "#6a6a72");
+      ctx.fillStyle = handleShade;
       ctx.fillRect(handleX, handleY, handleW, handleH);
       ctx.strokeStyle = "#000000";
       ctx.lineWidth = 2;
       ctx.strokeRect(handleX + 1, handleY + 1, handleW - 2, handleH - 2);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+      ctx.fillRect(handleX + 3, handleY + 2, handleW - 6, 2);
       ctx.fillStyle = "#1a1a1a";
       ctx.font = "bold 11px sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText("LOCK", baseX + baseW / 2, baseY + baseH * 0.68);
+      ctx.fillText("LOCK", baseX + baseW / 2, baseY + baseH * 0.74);
     }
 
     function drawLoaderFireButton(rect, state) {
@@ -2170,7 +2129,6 @@
 
     function drawLoader(room, player) {
       const rect = getLoaderRect(room);
-      const near = stationNearHand(player, room) === "loader";
       const parts = loaderParts(rect);
       ctx.save();
       drawBeveledRect(rect);
@@ -2187,14 +2145,14 @@
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText("LOADER", rect.x + rect.width / 2, rect.y + 14);
-      drawLoaderChamber(parts, player);
-      drawLockLever(parts.lock, player.loaderLocked);
+      drawLoaderHole(parts.hole, player);
+      drawLockLever(parts.lock, player.loaderLever || 0);
       let fireState = "dark";
       if (loaderFireLit(player)) fireState = "lit";
-      else if (loaderRecovering(player) && player.loaderLocked && player.canFire) fireState = "recover";
+      else if (loaderRecovering(player) && player.loaderLocked) fireState = "recover";
       drawLoaderFireButton(parts.fire, fireState);
       ctx.restore();
-      if (near && machineStarted) drawInteractOutline(parts.port);
+      if (machineStarted && handOverLoaderHole(player, parts.hole)) drawHoleHighlight(parts.hole);
     }
 
     function pressLoader(player, room) {
@@ -4247,9 +4205,9 @@
         return;
       }
       if (player.carryingShell) {
-        const port = loaderParts(getLoaderRect(room)).port;
-        const overPort = pointInRect(player.x, player.y, port);
-        if (!tryDepositShell(player, overPort ? "loader-port" : "")) dropCarriedShell(player);
+        const hole = loaderParts(getLoaderRect(room)).hole;
+        const overHole = handOverLoaderHole(player, hole);
+        if (!tryDepositShell(player, overHole ? "loader-port" : "")) dropCarriedShell(player);
         return;
       }
       if (player.panelOpen) {
