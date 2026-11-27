@@ -619,6 +619,8 @@
       updateShellStorage(player2, dt);
       updateLoader(player1, dt);
       updateLoader(player2, dt);
+      syncHealthState(player1);
+      syncHealthState(player2);
       updateFallingShells(dt);
       if (moved1 || moved2) battlefieldDirty = true;
       // The last small step must be saved even if the throttle window has not ended.
@@ -686,9 +688,14 @@
       ctx.fill();
     }
 
-    // Open while the hand is free. Curled while it grips the stick or holds the start button.
+    function interactKeyHeld(hand) {
+      const key = hand === player1 ? INTERACT_KEY_P1 : INTERACT_KEY_P2;
+      return keys[key] === true;
+    }
+
+    // Open while the hand is free. Curled for the whole time the interact key is held.
     function drawHand(hand, color) {
-      const pose = (hand.gripping || hand.holdingStart || hand.carryingShell || hand.idleGrab) ? "hold" : "open";
+      const pose = (hand.gripping || hand.holdingStart || hand.carryingShell || interactKeyHeld(hand)) ? "hold" : "open";
       drawHandShape(hand.x, hand.y, color, pose);
       if (hand.carryingShell) drawShellGlyph(hand.x, hand.y, SHELL_CARRIED_LENGTH, 0);
     }
@@ -927,13 +934,59 @@
       return ACTIVITY_COLORS.Idle;
     }
 
-    // Health is stored from 0 to MAX_HEALTH. The monitor shows that as a percent.
+    // Health is stored from 0 to MAX_HEALTH. The monitor shows a named band.
     function healthPercent(player) {
       const index = player === player1 ? 0 : 1;
       let health = battlefield.players[index].health;
       if (health < 0) health = 0;
       if (health > MAX_HEALTH) health = MAX_HEALTH;
       return Math.round((health / MAX_HEALTH) * 100);
+    }
+
+    // Five bands. The number on the line is the band, and 0 loses the round.
+    function healthStatusOf(percent) {
+      if (percent <= 0) return { name: "Broken", percent: 0, color: "#ff4040" };
+      if (percent <= 25) return { name: "Heavily Damaged", percent: 25, color: "#ff4040" };
+      if (percent <= 50) return { name: "Damaged", percent: 50, color: "#ff8a3d" };
+      if (percent <= 75) return { name: "Lightly Damaged", percent: 75, color: "#ffb020" };
+      return { name: "Stable", percent: 100, color: "#39ff6a" };
+    }
+
+    // Later damage sets health to 0. This only marks the loss. There is no replay.
+    function onPlayerLost(player) {
+      player.lost = true;
+    }
+
+    function syncHealthState(player) {
+      if (player.lost) return;
+      if (healthPercent(player) > 0) return;
+      onPlayerLost(player);
+    }
+
+    function loaderIsLoading(player) {
+      for (let i = 0; i < player.loaderSlots.length; i++) {
+        const slot = player.loaderSlots[i];
+        if (slot && !slot.ready) return true;
+      }
+      return false;
+    }
+
+    // One activity for the line under health. Renewing shells lives here.
+    function machineStateOf(player) {
+      if (player.shootingUntil && frameTime < player.shootingUntil) {
+        return { text: "Shooting", color: "#ff8a3d" };
+      }
+      if (loaderRecovering(player)) return { text: "Recovering", color: "#ffb020" };
+      if (loaderIsLoading(player)) return { text: "Loading", color: "#ffe14a" };
+      if (machineStarted && player.storageClosedAt != null) {
+        return { text: "Reloading storage (Renewing shells in 1 minute)", color: COLOR_REFUEL_LED };
+      }
+      if (player.refueling) return { text: "Refueling", color: ACTIVITY_COLORS.Refueling };
+      if (player.turretBusy) return { text: "Turning turret", color: ACTIVITY_COLORS.Turning };
+      const index = player === player1 ? 0 : 1;
+      const unit = battlefield.players[index];
+      if (Math.hypot(unit.vx, unit.vy) > MOVE_STATUS_SPEED) return { text: "Moving", color: ACTIVITY_COLORS.Moving };
+      return { text: "Idle", color: ACTIVITY_COLORS.Idle };
     }
 
     // Monitor and radar in one horizontal band. Three equal gaps inside that band.
@@ -1054,6 +1107,17 @@
 
     function getMonitorRect(room) {
       return getStationLayout(room).monitor;
+    }
+
+    function monitorScreen(room) {
+      const rect = getMonitorRect(room);
+      const bezel = Math.min(MONITOR_BEZEL, rect.width / 4, rect.height / 4);
+      return {
+        x: rect.x + bezel,
+        y: rect.y + bezel,
+        width: Math.max(1, rect.width - bezel * 2),
+        height: Math.max(1, rect.height - bezel * 2)
+      };
     }
 
     function getRadarRect(room) {
@@ -1952,6 +2016,10 @@
 
     function updateLoader(player, dt) {
       if (!machineStarted) return;
+      const coverWant = player.loaderLocked ? 1 : 0;
+      const coverStep = dt / 0.35;
+      if (player.loaderCover < coverWant) player.loaderCover = Math.min(1, player.loaderCover + coverStep);
+      else if (player.loaderCover > coverWant) player.loaderCover = Math.max(0, player.loaderCover - coverStep);
       const leverWant = player.loaderLocked ? 1 : 0;
       const leverStep = dt / 0.42;
       if (player.loaderLever < leverWant) player.loaderLever = Math.min(1, player.loaderLever + leverStep);
@@ -2022,6 +2090,7 @@
       compactLoaderSlots(player);
       player.statusNotice = "";
       player.loaderRecoverUntil = frameTime + LOADER_RECOVER_SECONDS * 1000;
+      player.shootingUntil = frameTime + 450;
       addStatusMessage(player, "> Loader: FIRE! Shell away.");
       fireShell(player);
       if (loaderCount(player) === 0) {
@@ -2154,6 +2223,34 @@
         drawShellBaseInBore(hole, t);
       }
       ctx.restore();
+      drawBoreShutter(hole, player.loaderCover || 0);
+    }
+
+    // Two doors, same metal as the storage hatches, closing across the bore.
+    function drawBoreShutter(hole, amount) {
+      if (amount <= 0.001) return;
+      const lip = Math.max(2, hole.r * 0.12);
+      const span = hole.r * 2;
+      const doorW = lip + (hole.r - lip) * amount;
+      const top = hole.cy - hole.r;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(hole.cx, hole.cy, hole.r - 1, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.fillStyle = "#4e4e58";
+      ctx.fillRect(hole.cx - hole.r, top, doorW, span);
+      ctx.fillRect(hole.cx + hole.r - doorW, top, doorW, span);
+      ctx.fillStyle = COLOR_JOYSTICK_EDGE_LIGHT;
+      ctx.fillRect(hole.cx - hole.r, top, doorW, 2);
+      ctx.fillRect(hole.cx + hole.r - doorW, top, doorW, 2);
+      ctx.fillStyle = COLOR_JOYSTICK_EDGE_DARK;
+      ctx.fillRect(hole.cx - hole.r, top + span - 2, doorW, 2);
+      ctx.fillRect(hole.cx + hole.r - doorW, top + span - 2, doorW, 2);
+      if (amount > 0.85) {
+        ctx.fillStyle = "#121216";
+        ctx.fillRect(hole.cx - 1, top + 3, 2, span - 6);
+      }
+      ctx.restore();
     }
 
     function drawLockRod(x, top, width, bottom) {
@@ -2185,6 +2282,22 @@
       const upY = rect.y + 1;
       const downY = rect.y + rect.height - handleH - 1;
       const handleY = upY + (downY - upY) * amount;
+      const baseShade = ctx.createLinearGradient(baseX, baseY, baseX, baseY + baseH);
+      baseShade.addColorStop(0, "#c2c2ca");
+      baseShade.addColorStop(0.2, "#8e8e96");
+      baseShade.addColorStop(1, "#5c5c64");
+      ctx.fillStyle = baseShade;
+      ctx.fillRect(baseX, baseY, baseW, baseH);
+      ctx.strokeStyle = "#000000";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(baseX + 1, baseY + 1, baseW - 2, baseH - 2);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.38)";
+      ctx.fillRect(baseX + 2, baseY + 2, baseW - 4, 3);
+      ctx.fillStyle = "#1a1a1a";
+      ctx.font = "bold 11px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("LOCK", baseX + baseW / 2, baseY + baseH / 2);
       const pointingDown = handleY + handleH / 2 > baseY + baseH / 2;
       const rodTop = pointingDown ? baseY + baseH : handleY + handleH;
       const rodBottom = pointingDown ? handleY : baseY;
@@ -2204,22 +2317,6 @@
       ctx.strokeRect(handleX + 1, handleY + 1, handleW - 2, handleH - 2);
       ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
       ctx.fillRect(handleX + 3, handleY + 2, handleW - 6, 2);
-      const baseShade = ctx.createLinearGradient(baseX, baseY, baseX, baseY + baseH);
-      baseShade.addColorStop(0, "#c2c2ca");
-      baseShade.addColorStop(0.2, "#8e8e96");
-      baseShade.addColorStop(1, "#5c5c64");
-      ctx.fillStyle = baseShade;
-      ctx.fillRect(baseX, baseY, baseW, baseH);
-      ctx.strokeStyle = "#000000";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(baseX + 1, baseY + 1, baseW - 2, baseH - 2);
-      ctx.fillStyle = "rgba(255, 255, 255, 0.38)";
-      ctx.fillRect(baseX + 2, baseY + 2, baseW - 4, 3);
-      ctx.fillStyle = "#1a1a1a";
-      ctx.font = "bold 11px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("LOCK", baseX + baseW / 2, baseY + baseH / 2);
     }
 
     function loaderFireCircle(rect) {
@@ -2291,11 +2388,49 @@
       }
     }
 
+    function drawLoaderDressing(rect, parts) {
+      const hole = parts.hole;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(rect.x + 5, rect.y + 5, rect.width - 10, rect.height - 10);
+      ctx.clip();
+      const shade = ctx.createLinearGradient(rect.x, rect.y, rect.x, rect.y + rect.height);
+      shade.addColorStop(0, "rgba(255, 255, 255, 0.07)");
+      shade.addColorStop(0.4, "rgba(0, 0, 0, 0)");
+      shade.addColorStop(1, "rgba(0, 0, 0, 0.2)");
+      ctx.fillStyle = shade;
+      ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+      ctx.restore();
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.4)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(rect.x + 6.5, rect.y + 6.5, rect.width - 13, rect.height - 13);
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.14)";
+      ctx.strokeRect(rect.x + 8.5, rect.y + 8.5, rect.width - 17, rect.height - 17);
+      const stripeH = 7;
+      const stripeY = rect.y + rect.height - 9 - stripeH;
+      if (stripeY > hole.cy + hole.r + 18) drawCautionStripes(rect.x + 14, stripeY, rect.width - 28, stripeH);
+      ctx.fillStyle = COLOR_JOYSTICK_EDGE_DARK;
+      const vents = [
+        { x: hole.cx - hole.r - 9, y: hole.cy - 12, w: 5, h: 16 },
+        { x: hole.cx + hole.r + 4, y: hole.cy - 12, w: 5, h: 16 },
+        { x: hole.cx - 16, y: hole.cy - hole.r - 8, w: 14, h: 4 },
+        { x: hole.cx + 2, y: hole.cy - hole.r - 8, w: 14, h: 4 }
+      ];
+      for (let i = 0; i < vents.length; i++) {
+        const vent = vents[i];
+        if (vent.x < rect.x + 8 || vent.y < rect.y + 20) continue;
+        if (vent.x + vent.w > rect.x + rect.width - 8) continue;
+        if (vent.y + vent.h > rect.y + rect.height - 8) continue;
+        ctx.fillRect(vent.x, vent.y, vent.w, vent.h);
+      }
+    }
+
     function drawLoader(room, player) {
       const rect = getLoaderRect(room);
       const parts = loaderParts(rect);
       ctx.save();
       drawBeveledRect(rect);
+      drawLoaderDressing(rect, parts);
       const boltR = Math.max(2, Math.min(3, rect.width * 0.03));
       const inset = boltR + 3;
       if (rect.width > inset * 2 + 8 && rect.height > inset * 2 + 8) {
@@ -4172,39 +4307,54 @@
       return entry.color;
     }
 
-    // A storage or loader notice replaces the activity word. Otherwise the line is
-    // "Status: Intact (100%) | Idle".
-    function statusNoticeOf(player) {
-      if (machineStarted && player.storageClosedAt != null) {
-        return { text: "Renewing shells in 1 minute", color: COLOR_REFUEL_LED };
+    function drawLabeledLine(label, value, color, x, y, fontSize, maxWidth) {
+      let size = fontSize;
+      const full = label + value;
+      ctx.font = size + "px monospace";
+      while (size > 10 && ctx.measureText(full).width > maxWidth) {
+        size -= 1;
+        ctx.font = size + "px monospace";
       }
-      if (player.statusNotice === "Max capacity") {
-        return { text: "Max capacity", color: COLOR_REFUEL_LED };
-      }
-      if (player.statusNotice) return { text: player.statusNotice, color: COLOR_MONITOR_WARNING };
-      return null;
-    }
-
-    function drawStatusLine(player, x, y, fontSize) {
-      const notice = statusNoticeOf(player);
-      const parts = notice ? [
-        { text: "Status: ", color: COLOR_MONITOR_TEXT },
-        { text: notice.text, color: notice.color }
-      ] : [
-        { text: "Status: ", color: COLOR_MONITOR_TEXT },
-        { text: player.condition + " (" + healthPercent(player) + "%)", color: conditionColor(player.condition) },
-        { text: " | ", color: COLOR_MONITOR_TEXT },
-        { text: player.activity, color: activityColor(player.activity) }
-      ];
-      ctx.font = fontSize + "px monospace";
       ctx.textAlign = "left";
       ctx.textBaseline = "top";
-      let cursor = x;
-      for (let i = 0; i < parts.length; i++) {
-        ctx.fillStyle = parts[i].color;
-        ctx.fillText(parts[i].text, cursor, y);
-        cursor += ctx.measureText(parts[i].text).width;
-      }
+      ctx.fillStyle = COLOR_MONITOR_TEXT;
+      ctx.fillText(label, x, y);
+      const labelW = ctx.measureText(label).width;
+      ctx.fillStyle = color;
+      ctx.fillText(value, x + labelW, y);
+    }
+
+    function statusStripHeight(lineHeight) {
+      return lineHeight * 2 + 12;
+    }
+
+    function monitorClearRect(screen, lineHeight) {
+      const barH = statusStripHeight(lineHeight);
+      const height = Math.max(14, Math.min(18, lineHeight - 2));
+      const width = 52;
+      return {
+        x: screen.x + screen.width - width - 6,
+        y: screen.y + screen.height - barH + 6,
+        width: width,
+        height: height
+      };
+    }
+
+    function clearMonitorLog(player) {
+      player.messages = [];
+    }
+
+    function drawClearButton(rect) {
+      ctx.fillStyle = "#142018";
+      ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+      ctx.strokeStyle = "#39ff6a";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.width - 1, rect.height - 1);
+      ctx.fillStyle = "#39ff6a";
+      ctx.font = "bold 11px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("Clear", rect.x + rect.width / 2, rect.y + rect.height / 2);
     }
 
     // A long log line continues underneath instead of running off the screen.
@@ -4225,9 +4375,11 @@
     }
 
     function drawMessageList(player, screenX, screenY, screenW, screenH, fontSize, lineHeight) {
-      // The pinned status keeps a strip at the bottom. Log lines stop above it.
-      const barH = machineStarted ? lineHeight + 8 : 0;
+      // Health and activity keep a strip at the bottom. Log lines stop above it.
+      const barH = machineStarted ? statusStripHeight(lineHeight) : 0;
       const logH = Math.max(8, screenH - barH);
+      const screen = { x: screenX, y: screenY, width: screenW, height: screenH };
+      const clear = machineStarted ? monitorClearRect(screen, lineHeight) : null;
 
       ctx.save();
       ctx.beginPath();
@@ -4260,12 +4412,12 @@
       ctx.moveTo(screenX + 6, barY + 1);
       ctx.lineTo(screenX + screenW - 6, barY + 1);
       ctx.stroke();
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(screenX, barY, screenW, barH);
-      ctx.clip();
-      drawStatusLine(player, screenX + 8, barY + 6, fontSize);
-      ctx.restore();
+      const textW = Math.max(8, clear.x - (screenX + 8) - 6);
+      const health = healthStatusOf(healthPercent(player));
+      const state = machineStateOf(player);
+      drawLabeledLine("Status: ", health.name + " (" + health.percent + "%)", health.color, screenX + 8, barY + 5, fontSize, textW);
+      drawLabeledLine("State: ", state.text, state.color, screenX + 8, barY + 5 + lineHeight, fontSize, textW);
+      drawClearButton(clear);
     }
 
     function getZoomRect(room) {
@@ -4382,6 +4534,13 @@
         player.refueling = true;
         return;
       }
+      if (kind === "monitor") {
+        const screen = monitorScreen(room);
+        if (pointInRect(player.x, player.y, monitorClearRect(screen, MONITOR_LINE_HEIGHT))) {
+          clearMonitorLog(player);
+          return;
+        }
+      }
       if (kind === "storage") {
         const well = storageWell(getStorageRect(room));
         takeShell(player, storageSlotUnderHand(player, well));
@@ -4418,6 +4577,14 @@
         return;
       }
       player.pointPressFrom = frameTime;
+      if (player.panelKind !== "fire" && player.panelKind !== "radar" && player.panelKind !== "turret" && player.panelKind !== "map") {
+        const view = zoomContent(room, player.panelKind);
+        const screen = { x: view.screenX, y: view.screenY, width: view.screenW, height: view.screenH };
+        if (pointInRect(tip.x, tip.y, monitorClearRect(screen, MONITOR_LINE_HEIGHT))) {
+          clearMonitorLog(player);
+          return;
+        }
+      }
       if (player.panelKind === "turret") {
         const dialHit = dialUnderPoint(player, room);
         player.pointPressIndex = -1;
