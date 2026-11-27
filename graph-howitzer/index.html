@@ -181,9 +181,8 @@
     const SHELL_MIN_SPEED = 4;
     const SHELL_MAX_SPEED = 80;
     const SHELL_DAMAGE_PER_MPS = 2; // stored damage, applied when the blast overlaps the opponent
-    const SHELL_BODY_RADIUS = 0.08; // the shell dot. In-air contact uses this, not the blast.
+    const SHELL_BODY_RADIUS = 0.08; // the shell dot. In-air contact with the opponent uses this, not the blast.
     const SHELL_BLAST_RADIUS = 0.8; // meters. X circle, ground check, damage, and carving.
-    const SHELL_OBSTACLE_HEIGHT = 8; // meters. Higher arcs pass over a footprint.
     const SHELL_OBSTACLE_HITS = 3; // a third blast removes the obstacle
     const SHELL_EXPLOSION_SECONDS = 0.8;
     const SHELL_STORAGE_COUNT = 8;
@@ -2101,7 +2100,7 @@
     }
 
     // True when a ground crossing has an opponent or an obstacle inside the blast circle.
-    // Bare ground is not a hit, so the shell keeps following the curve.
+    // Obstacles are not solid in the air. Bare ground is not a hit, so the shell keeps flying.
     function groundContact(shell) {
       const world = shellWorld(shell);
       const enemy = battlefield.players[1 - shell.owner];
@@ -2230,31 +2229,6 @@
       return { enter: t0, exit: t1 };
     }
 
-    function circleSpan(x0, y0, x1, y1, cx, cy, radius) {
-      const dx = x1 - x0;
-      const dy = y1 - y0;
-      const fx = x0 - cx;
-      const fy = y0 - cy;
-      const a = dx * dx + dy * dy;
-      const b = 2 * (fx * dx + fy * dy);
-      const c = fx * fx + fy * fy - radius * radius;
-      if (a < 1e-12) return c <= 0 ? { enter: 0, exit: 1 } : null;
-      const disc = b * b - 4 * a * c;
-      if (disc < 0) return null;
-      const root = Math.sqrt(disc);
-      let lo = (-b - root) / (2 * a);
-      let hi = (-b + root) / (2 * a);
-      if (lo > hi) {
-        const swap = lo;
-        lo = hi;
-        hi = swap;
-      }
-      lo = Math.max(0, lo);
-      hi = Math.min(1, hi);
-      if (hi < lo) return null;
-      return { enter: lo, exit: hi };
-    }
-
     function overlapSpan(aLo, aHi, bLo, bHi) {
       const lo = Math.max(aLo, bLo);
       const hi = Math.min(aHi, bHi);
@@ -2304,49 +2278,6 @@
       return uRaw;
     }
 
-    // The shell dot, not the blast circle. A near miss of the shape is not a hit.
-    function obstacleOuterSpan(x0, y0, x1, y1, obstacle) {
-      const pad = SHELL_BODY_RADIUS;
-      if (obstacle.type === "tower") {
-        return circleSpan(x0, y0, x1, y1, obstacle.x, obstacle.y, (obstacle.r || 0) + pad);
-      }
-      const halfW = (obstacle.w || 0) / 2 + pad;
-      const halfH = (obstacle.h || 0) / 2 + pad;
-      return segmentRectSpan(
-        x0, y0, x1, y1,
-        obstacle.x - halfW, obstacle.x + halfW, obstacle.y - halfH, obstacle.y + halfH
-      );
-    }
-
-    // First point where the small shell meets solid obstacle, skipping blast holes.
-    function firstObstacleU(x0, y0, z0, x1, y1, z1, obstacle) {
-      const heights = heightUSpan(z0, z1, SHELL_OBSTACLE_HEIGHT);
-      if (!heights) return null;
-      const outer = obstacleOuterSpan(x0, y0, x1, y1, obstacle);
-      if (!outer) return null;
-      let u = Math.max(outer.enter, heights.lo);
-      const limit = Math.min(outer.exit, heights.hi);
-      if (u > limit + 1e-6) return null;
-      const holes = obstacle.holes || [];
-      for (let n = 0; n < holes.length + 2; n++) {
-        const x = x0 + (x1 - x0) * u;
-        const y = y0 + (y1 - y0) * u;
-        let hole = null;
-        for (let h = 0; h < holes.length; h++) {
-          if (Math.hypot(x - holes[h].x, y - holes[h].y) < holes[h].r - 1e-4) {
-            hole = holes[h];
-            break;
-          }
-        }
-        if (!hole) return u;
-        const span = circleSpan(x0, y0, x1, y1, hole.x, hole.y, hole.r);
-        if (!span || span.exit <= u + 1e-5) return null;
-        u = span.exit + 1e-4;
-        if (u > limit) return null;
-      }
-      return null;
-    }
-
     function outsideField(x, y) {
       return x < -FIELD_X_MAX || x > FIELD_X_MAX || y < -FIELD_Y_MAX || y > FIELD_Y_MAX;
     }
@@ -2379,14 +2310,6 @@
           reason = "opponent";
         }
       }
-      const obstacles = battlefield.obstacles || [];
-      for (let i = 0; i < obstacles.length; i++) {
-        const u = firstObstacleU(from.x, from.y, from.z, to.x, to.y, to.z, obstacles[i]);
-        if (u !== null && u < bestU) {
-          bestU = u;
-          reason = "obstacle";
-        }
-      }
       const edge = borderU(from.x, from.y, from.z, to.x, to.y, to.z);
       if (edge !== null && edge < bestU) {
         bestU = edge;
@@ -2410,8 +2333,10 @@
       return timeLeft - step / Math.max(shell.speed, SHELL_MIN_SPEED);
     }
 
-    // Follow the curve, including under the ground. In the air the shell's own dot
-    // finds the contact. Height 0 uses the exact crossing, then the blast circle.
+    // Follow the curve, including through obstacle volumes and under the ground.
+    // In the air the shell's own dot finds the opponent and the border. An obstacle
+    // is a ground target: only a height-0 crossing inside the blast circle hits it.
+    // That crossing is the exact interpolated point, the same place as the X.
     function advanceShell(shell, dt) {
       let timeLeft = dt;
       const path = shell.path;
