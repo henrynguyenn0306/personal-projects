@@ -83,6 +83,9 @@
     const OUTLINE_Y = 0.08;
     const SHAPE_Y = 0.14;
     const OUTLINE_PAD = 0.45;
+    const TARGET_MARK_SIZE = 1.4;
+    const TARGET_MARK_RADIUS = TARGET_MARK_SIZE * 1.75;
+    const SHELL_DOT_RADIUS = 2.2;
 
     // Default camera looks from the near-right, so game +y is toward the top of the view
     // and the far-left corner (min x, max game y) sits at the top-left of the field.
@@ -130,10 +133,12 @@
     const obstaclesGroup = new THREE.Group();
     const machinesGroup = new THREE.Group();
     const arcsGroup = new THREE.Group();
+    const shellsGroup = new THREE.Group();
     const arcAnchors = [new THREE.Group(), new THREE.Group()];
     scene.add(obstaclesGroup);
     scene.add(machinesGroup);
     scene.add(arcsGroup);
+    scene.add(shellsGroup);
     arcsGroup.add(arcAnchors[0]);
     arcsGroup.add(arcAnchors[1]);
 
@@ -807,7 +812,7 @@
     }
 
     function makeGroundX(color, at) {
-      const size = 1.4;
+      const size = TARGET_MARK_SIZE;
       const lift = 0.22;
       const material = new THREE.LineBasicMaterial({ color: color });
       const first = new THREE.BufferGeometry().setFromPoints([
@@ -1004,6 +1009,48 @@
       notePoses(performance.now());
       syncArcs();
       placeLive(performance.now());
+      syncShellMarkers();
+    }
+
+    function syncShellMarkers() {
+      clearGroup(shellsGroup);
+      const shells = battlefield && battlefield.shells ? battlefield.shells : [];
+      for (let i = 0; i < shells.length; i++) {
+        const shell = shells[i];
+        if (shell.alive) {
+          const dot = new THREE.Mesh(
+            new THREE.SphereGeometry(SHELL_DOT_RADIUS, 16, 12),
+            new THREE.MeshBasicMaterial({ color: 0xffe14a })
+          );
+          dot.position.set(worldX(shell.x), shell.z, worldZ(shell.y));
+          shellsGroup.add(dot);
+        }
+        if (!shell.blast) continue;
+        const radius = shell.blast.radius > 0 ? shell.blast.radius : TARGET_MARK_RADIUS;
+        const life = Math.max(0, 1 - (Number(shell.blast.age) || 0) / 0.8);
+        const blast = new THREE.Mesh(
+          new THREE.SphereGeometry(radius, 18, 14),
+          new THREE.MeshBasicMaterial({
+            color: 0xff5a1a,
+            transparent: true,
+            opacity: 0.35 + 0.55 * life
+          })
+        );
+        blast.position.set(worldX(shell.blast.x), Math.max(radius * 0.45, shell.blast.z), worldZ(shell.blast.y));
+        shellsGroup.add(blast);
+        const ring = new THREE.Mesh(
+          new THREE.RingGeometry(Math.max(0.2, radius * 0.82), radius, 28),
+          new THREE.MeshBasicMaterial({
+            color: 0xffb020,
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: Math.max(0.2, life)
+          })
+        );
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.set(worldX(shell.blast.x), 0.45, worldZ(shell.blast.y));
+        shellsGroup.add(ring);
+      }
     }
 
     function loadSavedBattlefield() {
@@ -1039,6 +1086,7 @@
       controls.update();
       updateLabelScale();
       placeLive(performance.now());
+      syncShellMarkers();
       updateHover();
       renderer.render(scene, camera);
     }
