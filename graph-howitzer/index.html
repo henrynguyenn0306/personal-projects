@@ -1897,10 +1897,6 @@
       const step = dt / 0.35;
       if (player.hatch < want) player.hatch = Math.min(1, player.hatch + step);
       else if (player.hatch > want) player.hatch = Math.max(0, player.hatch - step);
-      if (!storageRackLocked(player)) {
-        const locked = warningIndex(player, "storage-locked");
-        if (locked !== -1) player.messages.splice(locked, 1);
-      }
       if (!machineStarted || player.storageClosedAt == null) return;
       if (frameTime - player.storageClosedAt < SHELL_RESTOCK_SECONDS * 1000) return;
       for (let i = 0; i < player.storageSlots.length; i++) player.storageSlots[i] = true;
@@ -1923,12 +1919,7 @@
 
     function takeShell(player, index) {
       if (player.carryingShell) return;
-      if (storageRackLocked(player)) {
-        if (warningIndex(player, "storage-locked") === -1) {
-          addStatusMessage(player, { text: "> Storage: Rack locked.", color: COLOR_MONITOR_TEXT, kind: "storage-locked" });
-        }
-        return;
-      }
+      if (storageRackLocked(player)) return;
       if (player.storageClosedAt != null || storageFilled(player) <= 0) {
         if (warningIndex(player, "storage-closed") === -1) {
           addStatusMessage(player, { text: "> Storage: Hatches closed.", color: COLOR_MONITOR_TEXT, kind: "storage-closed" });
@@ -1939,7 +1930,6 @@
       player.storageSlots[index] = false;
       player.shells = storageFilled(player);
       player.carryingShell = true;
-      addStatusMessage(player, "> Storage: Shell taken.");
       if (player.shells <= 0) {
         player.shells = 0;
         player.storageClosedAt = frameTime;
@@ -1992,13 +1982,11 @@
       const index = loaderFreeSlot(player);
       if (index < 0) {
         player.statusNotice = "Max capacity";
-        addStatusMessage(player, "> Loader: Max capacity.");
         return true;
       }
       player.carryingShell = false;
       player.loaderSlots[index] = { t: 0, ready: false };
       if (player.statusNotice === "Max capacity") player.statusNotice = "";
-      addStatusMessage(player, "> Loader: Shell inserted.");
       return true;
     }
 
@@ -2019,7 +2007,6 @@
         if (slot.t >= 1) {
           slot.t = 1;
           slot.ready = true;
-          addStatusMessage(player, "> Loader: Shell ready.");
         }
       }
       if (player.statusNotice === "Max capacity" && loaderFreeSlot(player) >= 0) player.statusNotice = "";
@@ -2029,7 +2016,6 @@
     function toggleLoaderLock(player) {
       if (player.loaderLocked) {
         player.loaderLocked = false;
-        addStatusMessage(player, "> Loader: Unlocked.");
         return;
       }
       if (loaderReadySlot(player) < 0) return;
@@ -2118,12 +2104,21 @@
       return (Math.round(value * 10) / 10).toFixed(1);
     }
 
+    // Ground reports are the distance to the opponent. Nothing else is added.
+    function impactDistanceText(shell) {
+      const enemy = battlefield.players[1 - shell.owner];
+      if (!enemy) return "Shell impacted: too far from the Opponent";
+      const dist = Math.hypot(enemy.x - shell.blast.x, enemy.y - shell.blast.y);
+      if (dist > HINT_RANGE) return "Shell impacted: too far from the Opponent";
+      return "Shell impacted: " + Math.round(dist) + " m from the Opponent";
+    }
+
     function shellImpactLine(reason, shell, outcome) {
+      const onGround = reason === "ground" || (reason === "end of path" && shell.height <= 0.05);
+      if (onGround) return impactDistanceText(shell);
       const speed = Math.round(shell.speed);
       const place = "(" + formatImpactCoord(shell.blast.x) + ", " + formatImpactCoord(shell.blast.y) + ") m, " + speed + " m/s";
-      let line = reason === "ground"
-        ? "> Shell: Ground impact at " + place + "."
-        : "> Shell: Impact (" + reason + ") at " + place + ".";
+      let line = "> Shell: Impact (" + reason + ") at " + place + ".";
       if (outcome.opponent) line += " Opponent hit (-" + shell.damage + ").";
       for (let i = 0; i < outcome.obstacles.length; i++) {
         const note = outcome.obstacles[i];
@@ -2204,9 +2199,11 @@
     }
 
     function addGroundMark(player, shell) {
+      const hint = groundHintValue(shell);
+      if (hint === "Too far") return;
       if (!player.attackMarks) player.attackMarks = [];
       const axis = axisFromGame(shell.blast.x, shell.blast.y);
-      player.attackMarks.push({ x: axis.x, y: axis.y, hint: groundHintValue(shell) });
+      player.attackMarks.push({ x: axis.x, y: axis.y, hint: hint });
     }
 
     function shotNoticeText(reason, shell, outcome, onGround) {
@@ -2222,9 +2219,7 @@
       if (hits > 0) return "Obstacle hit (" + hits + "/" + SHELL_OBSTACLE_HITS + ")";
       if (reason === "border") return "Shell hit the border";
       if (!onGround) return "";
-      const hint = groundHintValue(shell);
-      if (hint === "Too far") return "Hint: too far";
-      return "Hint: opponent ~" + hint.replace(" m", "") + " m away";
+      return impactDistanceText(shell);
     }
 
     function showShotNotice(player, text) {
@@ -2513,15 +2508,11 @@
 
     function pressLoaderFire(player) {
       if (!loaderLeverDown(player)) return;
-      if (loaderRecovering(player)) {
-        addStatusMessage(player, "> Loader: Recovering.");
-        return;
-      }
+      if (loaderRecovering(player)) return;
       if (loaderReadySlot(player) < 0) return;
       const reason = fireBlockReason(player);
       if (reason) {
         player.statusNotice = reason;
-        addStatusMessage(player, "> Loader: " + reason + ".");
         return;
       }
       const index = loaderReadySlot(player);
@@ -2530,12 +2521,8 @@
       player.statusNotice = "";
       player.loaderRecoverUntil = frameTime + LOADER_RECOVER_SECONDS * 1000;
       player.shootingUntil = frameTime + 450;
-      addStatusMessage(player, "> Loader: FIRE! Shell away.");
       fireShell(player);
-      if (loaderCount(player) === 0) {
-        player.loaderLocked = false;
-        addStatusMessage(player, "> Loader: Unlocked.");
-      }
+      if (loaderCount(player) === 0) player.loaderLocked = false;
     }
 
     // FIRE sits on the lock. The bore is shifted up to leave room for the ammo bar.
@@ -4883,7 +4870,7 @@
     }
 
     function statusStripHeight(lineHeight) {
-      return lineHeight * 2 + 12;
+      return lineHeight + 12;
     }
 
     // Clear shares the Status row, on the right, inside the opened window only.
@@ -4891,7 +4878,7 @@
       const width = 46;
       const height = 16;
       const margin = 8;
-      const statusH = lineHeight * 2 + 8;
+      const statusH = lineHeight + 8;
       const barY = screen.y + screen.height - statusH;
       const lineTop = barY + 6;
       let x = screen.x + screen.width - width - margin;
@@ -4941,13 +4928,40 @@
       return lines.length ? lines : [text];
     }
 
+    function drawStatusLine(health, state, x, y, fontSize, maxWidth) {
+      const label = "Status: ";
+      const healthText = health.name + " (" + health.percent + "%)";
+      const gap = " | ";
+      const full = label + healthText + gap + state.text;
+      let size = fontSize;
+      ctx.font = size + "px monospace";
+      while (size > 10 && ctx.measureText(full).width > maxWidth) {
+        size -= 1;
+        ctx.font = size + "px monospace";
+      }
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      let cursor = x;
+      ctx.fillStyle = COLOR_MONITOR_TEXT;
+      ctx.fillText(label, cursor, y);
+      cursor += ctx.measureText(label).width;
+      ctx.fillStyle = health.color;
+      ctx.fillText(healthText, cursor, y);
+      cursor += ctx.measureText(healthText).width;
+      ctx.fillStyle = COLOR_MONITOR_TEXT;
+      ctx.fillText(gap, cursor, y);
+      cursor += ctx.measureText(gap).width;
+      ctx.fillStyle = state.color;
+      ctx.fillText(state.text, cursor, y);
+    }
+
     function drawMessageList(player, screenX, screenY, screenW, screenH, fontSize, lineHeight, showClear) {
-      // Log on top, then a rule, then the Status row and the State row. Clear sits on the Status row.
+      // Log on top, then a rule, then one Status row. Clear sits on that row.
       const pad = 8;
       const screen = { x: screenX, y: screenY, width: screenW, height: screenH };
       const showStatus = machineStarted;
       const clear = showStatus && showClear !== false ? monitorClearRect(screen, fontSize, lineHeight) : null;
-      const statusH = showStatus ? lineHeight * 2 + 8 : 0;
+      const statusH = showStatus ? lineHeight + 8 : 0;
       const notice = activeShotNotice(player);
       const noticeH = notice ? Math.min(13, fontSize) + 14 : 0;
       const logY = screenY + pad + noticeH;
@@ -4993,8 +5007,7 @@
         const statusTextW = clear ? Math.max(8, clear.x - 8 - (screenX + pad)) : textW;
         const health = healthStatusOf(healthPercent(player));
         const state = machineStateOf(player);
-        drawLabeledLine("Status: ", health.name + " (" + health.percent + "%)", health.color, screenX + pad, barY + 6, fontSize, statusTextW);
-        drawLabeledLine("State: ", state.text, state.color, screenX + pad, barY + 6 + lineHeight, fontSize, textW);
+        drawStatusLine(health, state, screenX + pad, barY + 6, fontSize, statusTextW);
         if (clear) drawClearButton(clear);
       }
       if (notice) drawShotNotice(notice, screenX, screenY + pad, screenW, fontSize);
