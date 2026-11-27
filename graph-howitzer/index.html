@@ -1626,6 +1626,22 @@
         ctx.fillStyle = "rgba(8, 8, 12, 0.45)";
         ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
       }
+      ctx.fillStyle = usable ? COLOR_JOYSTICK_LABEL_TEXT : COLOR_REFUEL_DISABLED;
+      ctx.font = "bold 10px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("REFUEL", rect.x + rect.width / 2, rect.y + rect.height * 0.36);
+      let led = COLOR_JOYSTICK_LED_OFF;
+      if (player.refueling) {
+        const step = Math.floor((frameTime / 1000) / REFUEL_BLINK_SECONDS);
+        led = step % 2 === 0 ? COLOR_REFUEL_LED : "#5a3a10";
+      } else if (machineStarted && fuelOf(player) <= 0) {
+        led = COLOR_REFUEL_LED;
+      }
+      ctx.fillStyle = led;
+      ctx.beginPath();
+      ctx.arc(rect.x + rect.width / 2, rect.y + rect.height * 0.68, 5, 0, Math.PI * 2);
+      ctx.fill();
       ctx.restore();
       if (near && machineStarted && usable) drawInteractOutline(rect);
     }
@@ -4128,8 +4144,7 @@
         return;
       }
 
-      // Scope matches the centered radar: rings, crosshair, sweep, and contacts
-      // share the glass center and the clip keeps them on the screen.
+      // Rings, crosshair, sweep, contacts, and the player dot share the glass center.
       const centerX = screenX + screenW / 2;
       const centerY = screenY + screenH / 2;
       const rangePx = Math.min(screenW, screenH) / 2;
@@ -4138,12 +4153,16 @@
       drawRadarSweep(centerX, centerY, rangePx);
       drawRadarRangeRings(centerX, centerY, rangePx, showBlips);
 
-      // Player marker replaces the old bezel square, shifted left onto the glass.
-      const markerX = screenX + screenW - 16;
-      const markerY = screenY + screenH - 10;
+      // Zoomed radar only: the machine's square footprint, darker than the contacts.
+      if (showBlips) {
+        const side = PLAYER_SIZE * (rangePx / RADAR_RANGE);
+        ctx.fillStyle = "#145c32";
+        ctx.fillRect(centerX - side / 2, centerY - side / 2, side, side);
+      }
+
       ctx.fillStyle = COLOR_RADAR_YOU;
       ctx.beginPath();
-      ctx.arc(markerX, markerY, showBlips ? 5 : 4, 0, Math.PI * 2);
+      ctx.arc(centerX, centerY, showBlips ? 5 : 3, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
     }
