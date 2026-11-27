@@ -1219,7 +1219,10 @@
       ctx.fillStyle = COLOR_MONITOR_SCREEN;
       ctx.fillRect(screenX, screenY, screenW, screenH);
 
-      drawMessageList(player, screenX, screenY, screenW, screenH, MONITOR_FONT_SIZE, MONITOR_LINE_HEIGHT);
+      // The open status window has its own Clear. Drawing this one too leaves it
+      // above that window, outside the glass.
+      const statusWindow = player.panelOpen && player.panelKind === "monitor";
+      drawMessageList(player, screenX, screenY, screenW, screenH, MONITOR_FONT_SIZE, MONITOR_LINE_HEIGHT, !statusWindow, 0);
       if (near && machineStarted) drawInteractOutline(rect);
     }
 
@@ -1625,6 +1628,15 @@
         ctx.fillStyle = "rgba(8, 8, 12, 0.45)";
         ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
       }
+      // Pressable face only. No station name and no indicator dot.
+      const facePad = Math.max(5, Math.min(rect.width, rect.height) * 0.16);
+      const face = {
+        x: rect.x + facePad,
+        y: rect.y + facePad,
+        width: rect.width - facePad * 2,
+        height: rect.height - facePad * 2
+      };
+      if (face.width > 8 && face.height > 8) drawBeveledRect(face);
       ctx.restore();
       if (near && machineStarted && usable) drawInteractOutline(rect);
     }
@@ -3555,6 +3567,33 @@
       }
       ctx.stroke();
 
+      // Obstacles inside the field. Anything past the map border stays clipped off.
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(plot.x, plot.y, plot.w, plot.h);
+      ctx.clip();
+      const obstacles = battlefield.obstacles || [];
+      for (let i = 0; i < obstacles.length; i++) {
+        const obstacle = obstacles[i];
+        if (obstacleOutsideField(obstacle)) continue;
+        const center = axisFromGame(obstacle.x, obstacle.y);
+        if (obstacle.type === "tower") {
+          const spot = mapPoint(plot, center.x, center.y);
+          const radius = Math.max(1, (obstacle.r || 2) / spanX * plot.w);
+          ctx.fillStyle = "#c8c8d2";
+          ctx.beginPath();
+          ctx.arc(spot.x, spot.y, radius, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          const wide = obstacle.w || 6;
+          const deep = obstacle.h || 6;
+          const corner = mapPoint(plot, center.x - wide / 2, center.y - deep / 2);
+          ctx.fillStyle = "#8a8a96";
+          ctx.fillRect(corner.x, corner.y, wide / spanX * plot.w, deep / spanY * plot.h);
+        }
+      }
+      ctx.restore();
+
       ctx.strokeStyle = "rgba(216, 255, 228, 0.9)";
       ctx.lineWidth = withLabels ? 1.5 : 1;
       ctx.strokeRect(plot.x + 0.5, plot.y + 0.5, Math.max(1, plot.w - 1), Math.max(1, plot.h - 1));
@@ -4098,15 +4137,14 @@
         return;
       }
 
-      // Rings and the crosshair sit in the middle of the screen. The player dot is the old
-      // corner square, nudged left, and the sweep and contacts start there.
-      const centerX = screenX + screenW / 2;
-      const centerY = screenY + screenH / 2;
+      // One origin: the player dot. Rings, crosshair, and the sweep share it.
+      // The screen clip above cuts anything that would leave the glass. The sweep
+      // angle runs a full turn around that dot.
       const playerX = screenX + screenW - 16;
       const playerY = screenY + screenH - 10;
       const rangePx = Math.min(screenW, screenH) / 2;
-      if (!showBlips) drawRadarCrosshair(screenX, screenY, screenW, screenH, centerX, centerY);
-      drawRadarRangeRings(centerX, centerY, rangePx, showBlips);
+      drawRadarCrosshair(screenX, screenY, screenW, screenH, playerX, playerY);
+      drawRadarRangeRings(playerX, playerY, rangePx, showBlips);
       if (showBlips) drawRadarBlips(playerX, playerY, rangePx, ownerIndex);
       drawRadarSweep(playerX, playerY, rangePx);
 
@@ -4251,12 +4289,18 @@
       return lineHeight * 2 + 12;
     }
 
-    function monitorClearRect(screen) {
+    // How far Clear must drop so it stays under the zoom's close control, inside the glass.
+    function clearTopInset(panel, screenY) {
+      const close = closeButtonRect(panel);
+      return Math.max(0, close.y + close.height + 4 - (screenY + 6));
+    }
+
+    function monitorClearRect(screen, topInset) {
       const width = 46;
       const height = 16;
       const margin = 6;
       let x = screen.x + screen.width - width - margin;
-      let y = screen.y + margin;
+      let y = screen.y + margin + (topInset || 0);
       const left = screen.x + 2;
       const top = screen.y + 2;
       const right = screen.x + screen.width - 2;
@@ -4302,12 +4346,12 @@
       return lines.length ? lines : [text];
     }
 
-    function drawMessageList(player, screenX, screenY, screenW, screenH, fontSize, lineHeight) {
+    function drawMessageList(player, screenX, screenY, screenW, screenH, fontSize, lineHeight, showClear, topInset) {
       // Log on top, then a rule, then health and activity. Clear sits in the top-right of the log.
       const pad = 8;
       const screen = { x: screenX, y: screenY, width: screenW, height: screenH };
       const showStatus = machineStarted;
-      const clear = showStatus ? monitorClearRect(screen) : null;
+      const clear = showStatus && showClear !== false ? monitorClearRect(screen, topInset) : null;
       const statusH = showStatus ? lineHeight * 2 + 8 : 0;
       const logY = screenY + pad;
       const logBottom = screenY + screenH - (showStatus ? statusH + 4 : pad);
@@ -4354,7 +4398,7 @@
         const state = machineStateOf(player);
         drawLabeledLine("Status: ", health.name + " (" + health.percent + "%)", health.color, screenX + pad, barY + 6, fontSize, textW);
         drawLabeledLine("State: ", state.text, state.color, screenX + pad, barY + 6 + lineHeight, fontSize, textW);
-        drawClearButton(clear);
+        if (clear) drawClearButton(clear);
       }
       ctx.restore();
     }
@@ -4519,7 +4563,8 @@
       if (player.panelKind !== "fire" && player.panelKind !== "radar" && player.panelKind !== "turret" && player.panelKind !== "map") {
         const view = zoomContent(room, player.panelKind);
         const screen = { x: view.screenX, y: view.screenY, width: view.screenW, height: view.screenH };
-        if (pointInRect(tip.x, tip.y, monitorClearRect(screen))) {
+        const topInset = clearTopInset(getZoomRect(room), view.screenY);
+        if (pointInRect(tip.x, tip.y, monitorClearRect(screen, topInset))) {
           clearMonitorLog(player);
           return;
         }
@@ -4688,7 +4733,7 @@
       } else if (player.panelKind === "map") {
         drawMapZoom(player, view);
       } else {
-        drawMessageList(player, screenX, screenY, screenW, screenH, MONITOR_FONT_SIZE, MONITOR_LINE_HEIGHT);
+        drawMessageList(player, screenX, screenY, screenW, screenH, MONITOR_FONT_SIZE, MONITOR_LINE_HEIGHT, true, clearTopInset(panel, screenY));
       }
 
       const button = closeButtonRect(panel);
@@ -4998,6 +5043,29 @@
         if (distance < reach + obstacleReach(others[i])) return true;
       }
       return false;
+    }
+
+    // True when the whole obstacle sits outside the field. A shape that crosses the border still counts as inside.
+    function obstacleOutsideField(obstacle) {
+      let left;
+      let right;
+      let top;
+      let bottom;
+      if (obstacle.type === "tower") {
+        const r = obstacle.r || 2;
+        left = obstacle.x - r;
+        right = obstacle.x + r;
+        top = obstacle.y - r;
+        bottom = obstacle.y + r;
+      } else {
+        const halfW = (obstacle.w || 6) / 2;
+        const halfH = (obstacle.h || 6) / 2;
+        left = obstacle.x - halfW;
+        right = obstacle.x + halfW;
+        top = obstacle.y - halfH;
+        bottom = obstacle.y + halfH;
+      }
+      return right < -FIELD_X_MAX || left > FIELD_X_MAX || bottom < -FIELD_Y_MAX || top > FIELD_Y_MAX;
     }
 
     function makeObstacles(players) {

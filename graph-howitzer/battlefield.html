@@ -400,17 +400,30 @@
       return group;
     }
 
-    // Obstacles stay in the simulation. This view draws them only for a debug load.
-    const SHOW_OBSTACLES = new URLSearchParams(window.location.search).get("debug") === "1";
+    // A footprint that lies completely outside the field is not drawn. Hit testing stays in the game.
+    function obstacleOutsideField(obstacle) {
+      let left;
+      let right;
+      let top;
+      let bottom;
+      if (obstacle.type === "tower") {
+        const r = obstacle.r || 2;
+        left = obstacle.x - r;
+        right = obstacle.x + r;
+        top = obstacle.y - r;
+        bottom = obstacle.y + r;
+      } else {
+        const halfW = (obstacle.w || 6) / 2;
+        const halfH = (obstacle.h || 6) / 2;
+        left = obstacle.x - halfW;
+        right = obstacle.x + halfW;
+        top = obstacle.y - halfH;
+        bottom = obstacle.y + halfH;
+      }
+      return right < -FIELD_X_MAX || left > FIELD_X_MAX || bottom < -FIELD_Y_MAX || top > FIELD_Y_MAX;
+    }
 
     function syncObstacles() {
-      if (!SHOW_OBSTACLES) {
-        if (obstacleSignature !== "hidden") {
-          obstacleSignature = "hidden";
-          clearGroup(obstaclesGroup);
-        }
-        return;
-      }
       const obstacles = battlefield.obstacles || [];
       const signature = signatureOf(obstacles);
       if (signature === obstacleSignature) return;
@@ -418,6 +431,7 @@
       clearGroup(obstaclesGroup);
       for (let i = 0; i < obstacles.length; i++) {
         const obstacle = obstacles[i];
+        if (obstacleOutsideField(obstacle)) continue;
         let shape;
         if (obstacle.type === "tower") {
           shape = flatFootprint("circle", obstacle.r || 2, 0, COLOR_TOWER);
