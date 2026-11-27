@@ -177,7 +177,7 @@
     const EQUATION_PREFIX = "y = ";
     const SHELL_SPEED = 20; // m/s along the path, not along the ground. Used for the flight-time readout.
     const SHELL_MUZZLE_SPEED = 18; // m/s as the shell leaves the bore
-    const SHELL_GRAVITY = 6; // m/s^2. Climbing spends speed. Falling adds it.
+    const SHELL_GRAVITY = 6; // m/s^2. Climbing spends speed. Falling, and leaving the ground, add it.
     const SHELL_MIN_SPEED = 4;
     const SHELL_MAX_SPEED = 80;
     const SHELL_DAMAGE_PER_MPS = 2; // stored damage, applied when the blast overlaps the opponent
@@ -2072,10 +2072,15 @@
       };
     }
 
-    // Climbing spends speed. Falling adds it. The shell never travels below the ground.
+    // Climbing in the air spends speed. Falling adds it. Climbing back out of the ground adds it too.
     function adjustShellSpeed(speed, y0, y1) {
+      if ((y0 < -1e-4 && y1 > 1e-4) || (y0 > 1e-4 && y1 < -1e-4)) {
+        speed = adjustShellSpeed(speed, y0, 0);
+        return adjustShellSpeed(speed, 0, y1);
+      }
       const dy = y1 - y0;
-      const delta = -2 * SHELL_GRAVITY * dy;
+      const emerging = y0 < -1e-4 && dy > 0;
+      const delta = emerging ? 2 * SHELL_GRAVITY * dy : -2 * SHELL_GRAVITY * dy;
       let next = speed * speed + delta;
       const floor = SHELL_MIN_SPEED * SHELL_MIN_SPEED;
       if (next < floor) next = floor;
@@ -2088,7 +2093,20 @@
       return Math.abs(x - unit.x) <= PLAYER_SIZE / 2 && Math.abs(y - unit.y) <= PLAYER_SIZE / 2;
     }
 
-    // Above the ground only. Reaching height 0 is a ground impact, handled by the caller.
+    // True when a ground crossing has an opponent or an obstacle inside the blast circle.
+    // Bare ground is not a hit, so the shell keeps following the curve.
+    function groundContact(shell) {
+      const world = shellWorld(shell);
+      const enemy = battlefield.players[1 - shell.owner];
+      if (enemy && circleOverlapsMachine(world.x, world.y, SHELL_BLAST_RADIUS, enemy)) return true;
+      const obstacles = battlefield.obstacles || [];
+      for (let i = 0; i < obstacles.length; i++) {
+        if (circleOverlapsSolid(world.x, world.y, SHELL_BLAST_RADIUS, obstacles[i])) return true;
+      }
+      return false;
+    }
+
+    // Above the ground only. Underground travel hits nothing.
     function shellStrike(shell) {
       if (shell.height <= 1e-4) return "";
       const world = shellWorld(shell);
@@ -2173,19 +2191,15 @@
       addStatusMessage(player, shellImpactLine(reason, shell, outcome));
     }
 
-    // Move along the curve. The first return to height 0 detonates. So does an
-    // opponent, obstacle, or border reached while still above the ground.
+    // Follow the curve, including under the ground. Height 0 detonates only when the
+    // blast circle touches an opponent or an obstacle. A direct hit, the border, and
+    // the end of the path still detonate.
     function advanceShell(shell, dt) {
       let timeLeft = dt;
       const path = shell.path;
       while (timeLeft > 1e-4 && shell.alive) {
-        if (shell.height < -1e-4) {
-          shell.height = 0;
-          explodeShell(shell, "ground");
-          return;
-        }
         if (shell.seg >= path.length - 1) {
-          explodeShell(shell, shell.height <= 1e-3 ? "ground" : "end of path");
+          explodeShell(shell, "end of path");
           return;
         }
         const a = path[shell.seg];
@@ -2201,51 +2215,45 @@
         const t0 = shell.into / segLen;
         const t1 = (shell.into + step) / segLen;
         const y0 = a.y + (b.y - a.y) * t0;
-        const yRaw = a.y + (b.y - a.y) * t1;
-        let tEnd = t1;
-        let y1 = yRaw;
-        let ground = false;
-        if (y0 > 1e-4 && yRaw <= 1e-4) {
-          const drop = y0 - yRaw;
-          const u = drop === 0 ? 1 : y0 / drop;
-          tEnd = t0 + (t1 - t0) * Math.max(0, Math.min(1, u));
-          y1 = 0;
-          ground = true;
-        } else if (yRaw < -1e-4 && y0 <= 1e-4) {
-          shell.height = 0;
-          explodeShell(shell, "ground");
-          return;
+        const y1 = a.y + (b.y - a.y) * t1;
+        const crossesDown = y0 > 1e-4 && y1 <= 1e-4;
+        const crossesUp = y0 < -1e-4 && y1 >= -1e-4;
+        let tStop = t1;
+        let yStop = y1;
+        if (crossesDown || crossesUp) {
+          const denom = y0 - y1;
+          const u = denom === 0 ? 1 : y0 / denom;
+          tStop = t0 + (t1 - t0) * Math.max(0, Math.min(1, u));
+          yStop = 0;
         }
-        const x1 = a.x + (b.x - a.x) * tEnd;
-        const usedStep = Math.max(0, (tEnd - t0) * segLen);
-        if (ground && y0 > 0.2) {
-          const tAir = t0 + (tEnd - t0) * 0.82;
+        if (crossesDown && y0 > 0.2) {
+          const tAir = t0 + (tStop - t0) * 0.85;
           const savedDistance = shell.distance;
           const savedHeight = shell.height;
+          const savedSpeed = shell.speed;
           shell.distance = a.x + (b.x - a.x) * tAir;
-          shell.height = y0 * 0.18;
+          shell.height = Math.max(0.05, y0 * 0.15);
           const early = shellStrike(shell);
-          shell.distance = savedDistance;
-          shell.height = savedHeight;
           if (early) {
-            shell.into += (tAir - t0) * segLen;
-            shell.distance = a.x + (b.x - a.x) * tAir;
-            shell.height = y0 * 0.18;
-            shell.speed = adjustShellSpeed(shell.speed, y0, shell.height);
+            const usedStep = (tAir - t0) * segLen;
+            shell.into += usedStep;
+            shell.speed = adjustShellSpeed(savedSpeed, y0, shell.height);
             shell.damage = Math.max(1, Math.round(shell.speed * SHELL_DAMAGE_PER_MPS));
-            timeLeft -= ((tAir - t0) * segLen) / Math.max(shell.speed, SHELL_MIN_SPEED);
             explodeShell(shell, early);
             return;
           }
+          shell.distance = savedDistance;
+          shell.height = savedHeight;
+          shell.speed = savedSpeed;
         }
-        const used = usedStep / Math.max(shell.speed, SHELL_MIN_SPEED);
+        const usedStep = Math.max(0, (tStop - t0) * segLen);
+        timeLeft -= usedStep / Math.max(shell.speed, SHELL_MIN_SPEED);
         shell.into += usedStep;
-        shell.distance = x1;
-        shell.height = y1;
-        shell.speed = adjustShellSpeed(shell.speed, y0, y1);
+        shell.distance = a.x + (b.x - a.x) * tStop;
+        shell.height = yStop;
+        shell.speed = adjustShellSpeed(shell.speed, y0, yStop);
         shell.damage = Math.max(1, Math.round(shell.speed * SHELL_DAMAGE_PER_MPS));
-        timeLeft -= used;
-        if (ground) {
+        if ((crossesDown || crossesUp) && groundContact(shell)) {
           explodeShell(shell, "ground");
           return;
         }
