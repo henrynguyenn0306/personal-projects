@@ -1955,94 +1955,94 @@
       }
     }
 
-    // The lever keeps its place at the bottom of the left column. FIRE sits on top of it.
-    // Everything else on the plate is the insert hole.
+    // A smaller FIRE-over-lock stack on the left, and a round bore in the space beside it.
     function loaderParts(rect) {
       const pad = 8;
       const titleH = 16;
-      const gap = 8;
-      let controlH = Math.round(Math.min(120, Math.max(84, rect.height * 0.44)));
-      let aboveH = rect.height - pad * 2 - titleH - gap - controlH;
-      if (aboveH < 58) {
-        aboveH = 58;
-        controlH = Math.max(64, rect.height - pad * 2 - titleH - gap - aboveH);
-      }
-      const contentW = Math.max(24, rect.width - pad * 2);
-      const leverW = Math.round(contentW * 0.56);
-      const columnX = rect.x + pad;
-      const columnY = rect.y + pad + titleH;
-      const lock = {
-        x: columnX,
-        y: columnY + aboveH + gap,
-        width: leverW,
-        height: controlH
-      };
-      const holeLeft = columnX + leverW + gap;
-      const holeTop = columnY;
-      const holeW = Math.max(16, rect.x + rect.width - pad - holeLeft);
-      const holeH = Math.max(16, lock.y + lock.height - holeTop);
+      const contentX = rect.x + pad;
+      const contentY = rect.y + pad + titleH;
+      const contentW = Math.max(40, rect.width - pad * 2);
+      const contentH = Math.max(40, rect.height - pad - titleH - pad);
+      const columnW = Math.round(Math.min(100, Math.max(72, contentW * 0.34)));
+      const fireH = Math.round(Math.min(46, Math.max(32, contentH * 0.2)));
+      const lockH = Math.round(Math.min(68, Math.max(48, contentH * 0.3)));
+      const stackGap = 6;
+      const stackH = fireH + stackGap + lockH;
+      const stackY = contentY + Math.max(0, (contentH - stackH) / 2);
+      const lane = Math.min(52, contentW * 0.2);
+      const rightPad = 6;
+      const boreRight = contentX + contentW - rightPad;
+      const boreLeft = contentX + columnW + stackGap + lane;
+      const diameter = Math.max(36, Math.min(boreRight - boreLeft, contentH - 10));
       return {
-        lock: lock,
-        fire: { x: columnX, y: columnY, width: leverW, height: aboveH },
+        fire: { x: contentX, y: stackY, width: columnW, height: fireH },
+        lock: { x: contentX, y: stackY + fireH + stackGap, width: columnW, height: lockH },
         hole: {
-          cx: holeLeft + holeW / 2,
-          cy: holeTop + holeH / 2,
-          rx: Math.max(8, holeW / 2 - 4),
-          ry: Math.max(8, holeH / 2 - 4)
+          cx: boreRight - diameter / 2,
+          cy: contentY + contentH / 2,
+          r: diameter / 2,
+          laneX: contentX + columnW
         }
       };
     }
 
     function handOverLoaderHole(player, hole) {
-      const nx = (player.x - hole.cx) / hole.rx;
-      const ny = (player.y - hole.cy) / hole.ry;
-      return nx * nx + ny * ny <= 1;
+      const dx = player.x - hole.cx;
+      const dy = player.y - hole.cy;
+      return dx * dx + dy * dy <= hole.r * hole.r;
     }
 
-    // Same center and radii as the drawn bore, a few pixels outside the rim.
+    // Same center and radius as the drawn bore, a few pixels outside the rim.
     function drawHoleHighlight(hole) {
       ctx.save();
       interactOutlineStyle();
       ctx.beginPath();
-      ctx.ellipse(hole.cx, hole.cy, hole.rx + 3, hole.ry + 3, 0, 0, Math.PI * 2);
+      ctx.arc(hole.cx, hole.cy, hole.r + 3, 0, Math.PI * 2);
       ctx.stroke();
       ctx.restore();
     }
 
     function drawLoaderHole(hole, player) {
+      if (machineStarted) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(hole.laneX, hole.cy - hole.r - 16, hole.cx + hole.r + 8 - hole.laneX, hole.r * 2 + 32);
+        ctx.clip();
+        for (let i = 0; i < player.loaderSlots.length; i++) {
+          const slot = player.loaderSlots[i];
+          if (!slot || slot.ready) continue;
+          const t = Math.max(0, Math.min(1, slot.t));
+          if (t >= 0.98) continue;
+          const length = Math.min(hole.r * 1.15, 54);
+          const x0 = hole.cx - hole.r - length / 2;
+          const x = x0 + (hole.r + length / 2) * t;
+          drawShellGlyph(x, hole.cy, length, 0);
+        }
+        ctx.restore();
+      }
       ctx.save();
       ctx.beginPath();
-      ctx.ellipse(hole.cx, hole.cy, hole.rx, hole.ry, 0, 0, Math.PI * 2);
+      ctx.arc(hole.cx, hole.cy, hole.r, 0, Math.PI * 2);
       ctx.clip();
-      const shade = ctx.createRadialGradient(hole.cx, hole.cy - hole.ry * 0.2, hole.rx * 0.15, hole.cx, hole.cy, Math.max(hole.rx, hole.ry));
-      shade.addColorStop(0, "#121614");
+      const shade = ctx.createRadialGradient(hole.cx - hole.r * 0.2, hole.cy - hole.r * 0.25, hole.r * 0.15, hole.cx, hole.cy, hole.r);
+      shade.addColorStop(0, "#1a1e1c");
       shade.addColorStop(1, "#050605");
       ctx.fillStyle = shade;
-      ctx.fillRect(hole.cx - hole.rx - 2, hole.cy - hole.ry - 2, hole.rx * 2 + 4, hole.ry * 2 + 4);
+      ctx.fillRect(hole.cx - hole.r - 2, hole.cy - hole.r - 2, hole.r * 2 + 4, hole.r * 2 + 4);
       ctx.restore();
       ctx.beginPath();
-      ctx.ellipse(hole.cx, hole.cy, hole.rx, hole.ry, 0, 0, Math.PI * 2);
+      ctx.arc(hole.cx, hole.cy, hole.r, 0, Math.PI * 2);
       ctx.strokeStyle = "#1a1a1e";
-      ctx.lineWidth = 7;
+      ctx.lineWidth = 6;
       ctx.stroke();
       ctx.strokeStyle = "#c4c4cc";
       ctx.lineWidth = 2;
       ctx.stroke();
       ctx.beginPath();
-      ctx.ellipse(hole.cx, hole.cy, hole.rx * 0.9, hole.ry * 0.9, 0, 0, Math.PI * 2);
+      ctx.arc(hole.cx, hole.cy, hole.r * 0.9, 0, Math.PI * 2);
       ctx.strokeStyle = "#000000";
       ctx.lineWidth = 2;
       ctx.stroke();
-      if (!machineStarted) return;
-      for (let i = 0; i < player.loaderSlots.length; i++) {
-        const slot = player.loaderSlots[i];
-        if (!slot || slot.ready) continue;
-        const t = Math.max(0, Math.min(1, slot.t));
-        if (t >= 0.98) continue;
-        const length = Math.min(hole.rx * 1.35, 64) * (1 - t * 0.82);
-        const y = hole.cy - hole.ry * (1 - t) * 0.72;
-        drawShellGlyph(hole.cx, y, Math.max(8, length), Math.PI / 2);
-      }
     }
 
     function drawLockRod(x, top, width, bottom) {
