@@ -335,8 +335,14 @@
     window.addEventListener("keyup", function (event) {
       const name = keyName(event);
       keys[name] = false;
-      if (name === INTERACT_KEY_P1) player1.dialDrag = false;
-      if (name === INTERACT_KEY_P2) player2.dialDrag = false;
+      if (name === INTERACT_KEY_P1) {
+        player1.dialDrag = false;
+        player1.idleGrab = false;
+      }
+      if (name === INTERACT_KEY_P2) {
+        player2.dialDrag = false;
+        player2.idleGrab = false;
+      }
     });
 
     // Turn held keys into a direction. Diagonal moves stay at the same speed.
@@ -682,7 +688,7 @@
 
     // Open while the hand is free. Curled while it grips the stick or holds the start button.
     function drawHand(hand, color) {
-      const pose = (hand.gripping || hand.holdingStart || hand.carryingShell) ? "hold" : "open";
+      const pose = (hand.gripping || hand.holdingStart || hand.carryingShell || hand.idleGrab) ? "hold" : "open";
       drawHandShape(hand.x, hand.y, color, pose);
       if (hand.carryingShell) drawShellGlyph(hand.x, hand.y, SHELL_CARRIED_LENGTH, 0);
     }
@@ -1719,23 +1725,27 @@
       return count;
     }
 
-    // Four columns by two rows of end-on shell bases inside the bay.
+    // Four columns by two rows, centered in the bay with even margins.
     function storageRack(well) {
       const cols = 4;
       const rows = 2;
-      const gapX = Math.max(4, well.w * 0.03);
-      const gapY = Math.max(4, well.h * 0.08);
-      const cellW = (well.w - gapX * (cols + 1)) / cols;
-      const cellH = (well.h - gapY * (rows + 1)) / rows;
-      const radius = Math.max(5, Math.min(cellW, cellH) * 0.42);
+      const gap = Math.max(5, Math.min(well.w, well.h) * 0.04);
+      const radius = Math.max(6, Math.min(
+        (well.w - gap * (cols + 1)) / cols / 2,
+        (well.h - gap * (rows + 1)) / rows / 2
+      ));
+      const gridW = radius * 2 * cols + gap * (cols - 1);
+      const gridH = radius * 2 * rows + gap * (rows - 1);
+      const originX = well.x + (well.w - gridW) / 2;
+      const originY = well.y + (well.h - gridH) / 2;
       const slots = [];
       for (let i = 0; i < cols * rows; i++) {
         const col = i % cols;
         const row = Math.floor(i / cols);
         slots.push({
           index: i,
-          cx: well.x + gapX + cellW * col + cellW / 2,
-          cy: well.y + gapY + cellH * row + cellH / 2,
+          cx: originX + radius + col * (radius * 2 + gap),
+          cy: originY + radius + row * (radius * 2 + gap),
           r: radius
         });
       }
@@ -1790,7 +1800,7 @@
         ctx.lineWidth = 1;
         ctx.strokeStyle = "#2a2e2c";
         ctx.stroke();
-        if (player.storageSlots[slot.index]) drawShellButt(slot.cx, slot.cy, slot.r * 0.92);
+        if (player.storageSlots[slot.index]) drawShellButt(slot.cx, slot.cy, slot.r * 0.96);
       }
       if (hover < 0 || !player.storageSlots[hover]) return;
       const slot = slots[hover];
@@ -2020,7 +2030,7 @@
       }
     }
 
-    // The bore stays where it is. FIRE sits on the lock and the pair fills the column beside it.
+    // FIRE sits on the lock. The bore is shifted up to leave room for the ammo bar.
     function loaderParts(rect) {
       const pad = 8;
       const titleH = 16;
@@ -2034,10 +2044,15 @@
       const rightPad = 6;
       const boreRight = contentX + contentW - rightPad;
       const boreLeft = contentX + columnW + stackGap + lane;
-      const diameter = Math.max(36, Math.min(boreRight - boreLeft, contentH - 10));
+      const barH = 10;
+      const barGap = 8;
+      const diameter = Math.max(36, Math.min(boreRight - boreLeft, contentH - barH - barGap - 12));
+      const slack = Math.max(0, contentH - diameter - barH - barGap);
+      const lift = Math.min(18, slack / 2);
+      const topMargin = Math.max(4, slack / 2 - lift);
       const hole = {
         cx: boreRight - diameter / 2,
-        cy: contentY + contentH / 2,
+        cy: contentY + topMargin + diameter / 2,
         r: diameter / 2,
         laneX: contentX + columnW
       };
@@ -2049,7 +2064,8 @@
       return {
         fire: { x: contentX, y: contentY, width: controlsW, height: fireH },
         lock: { x: contentX, y: contentY + fireH + between, width: controlsW, height: lockH },
-        hole: hole
+        hole: hole,
+        bar: { x: hole.cx - hole.r, y: hole.cy + hole.r + barGap, width: diameter, height: barH }
       };
     }
 
@@ -2159,37 +2175,23 @@
     // 0 points up (unlocked). 1 points down (locked). The base is the pivot.
     function drawLockLever(rect, pose) {
       const amount = pose * pose * (3 - 2 * pose);
-      const baseW = rect.width * 0.78;
-      const baseH = Math.max(18, rect.height * 0.26);
+      const baseW = rect.width * 0.7;
+      const baseH = Math.max(20, Math.min(24, rect.height * 0.16));
       const baseX = rect.x + (rect.width - baseW) / 2;
       const baseY = rect.y + (rect.height - baseH) / 2;
-      const handleH = Math.max(10, rect.height * 0.13);
-      const handleW = baseW * 0.92;
+      const handleH = Math.max(11, Math.min(15, rect.height * 0.09));
+      const handleW = baseW * 0.78;
       const handleX = rect.x + (rect.width - handleW) / 2;
-      const upY = rect.y + 2;
-      const downY = rect.y + rect.height - handleH - 2;
+      const upY = rect.y + 1;
+      const downY = rect.y + rect.height - handleH - 1;
       const handleY = upY + (downY - upY) * amount;
-      const baseShade = ctx.createLinearGradient(baseX, baseY, baseX, baseY + baseH);
-      baseShade.addColorStop(0, "#c2c2ca");
-      baseShade.addColorStop(0.2, "#8e8e96");
-      baseShade.addColorStop(1, "#5c5c64");
-      ctx.fillStyle = baseShade;
-      ctx.fillRect(baseX, baseY, baseW, baseH);
-      ctx.fillStyle = "rgba(0, 0, 0, 0.16)";
-      ctx.fillRect(baseX + 6, baseY + baseH * 0.28, baseW - 12, baseH * 0.44);
-      ctx.strokeStyle = "#000000";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(baseX + 1, baseY + 1, baseW - 2, baseH - 2);
-      ctx.fillStyle = "rgba(255, 255, 255, 0.38)";
-      ctx.fillRect(baseX + 2, baseY + 2, baseW - 4, 3);
-      const handleMid = handleY + handleH / 2;
-      const rodW = Math.max(7, rect.width * 0.1);
-      const pointingDown = handleMid > baseY + baseH / 2;
-      const rodA = pointingDown ? baseY + baseH * 0.35 : handleMid;
-      const rodB = pointingDown ? handleMid : baseY + baseH * 0.65;
-      if (rodB - rodA > 6) {
-        drawLockRod(handleX + handleW * 0.22, rodA, rodW, rodB);
-        drawLockRod(handleX + handleW * 0.78 - rodW, rodA, rodW, rodB);
+      const pointingDown = handleY + handleH / 2 > baseY + baseH / 2;
+      const rodTop = pointingDown ? baseY + baseH : handleY + handleH;
+      const rodBottom = pointingDown ? handleY : baseY;
+      const rodW = Math.max(8, rect.width * 0.11);
+      if (rodBottom - rodTop > 4) {
+        drawLockRod(handleX + handleW * 0.24, rodTop, rodW, rodBottom);
+        drawLockRod(handleX + handleW * 0.76 - rodW, rodTop, rodW, rodBottom);
       }
       const handleShade = ctx.createLinearGradient(handleX, handleY, handleX, handleY + handleH);
       handleShade.addColorStop(0, "#d8d8de");
@@ -2202,6 +2204,17 @@
       ctx.strokeRect(handleX + 1, handleY + 1, handleW - 2, handleH - 2);
       ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
       ctx.fillRect(handleX + 3, handleY + 2, handleW - 6, 2);
+      const baseShade = ctx.createLinearGradient(baseX, baseY, baseX, baseY + baseH);
+      baseShade.addColorStop(0, "#c2c2ca");
+      baseShade.addColorStop(0.2, "#8e8e96");
+      baseShade.addColorStop(1, "#5c5c64");
+      ctx.fillStyle = baseShade;
+      ctx.fillRect(baseX, baseY, baseW, baseH);
+      ctx.strokeStyle = "#000000";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(baseX + 1, baseY + 1, baseW - 2, baseH - 2);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.38)";
+      ctx.fillRect(baseX + 2, baseY + 2, baseW - 4, 3);
       ctx.fillStyle = "#1a1a1a";
       ctx.font = "bold 11px sans-serif";
       ctx.textAlign = "center";
@@ -2253,6 +2266,31 @@
       ctx.fillText("FIRE", button.cx, button.cy + 1);
     }
 
+    function loaderReadyCount(player) {
+      let count = 0;
+      for (let i = 0; i < player.loaderSlots.length; i++) {
+        const slot = player.loaderSlots[i];
+        if (slot && slot.ready) count += 1;
+      }
+      return count;
+    }
+
+    // Three segments under the bore. A segment fills when that shell is ready.
+    function drawLoaderAmmoBar(bar, readyCount) {
+      ctx.fillStyle = "#0c0e0c";
+      ctx.fillRect(bar.x, bar.y, bar.width, bar.height);
+      ctx.strokeStyle = "#3a3e3c";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bar.x + 0.5, bar.y + 0.5, Math.max(0, bar.width - 1), Math.max(0, bar.height - 1));
+      const gap = 3;
+      const segW = (bar.width - gap * 4) / 3;
+      if (segW <= 1) return;
+      for (let i = 0; i < 3; i++) {
+        ctx.fillStyle = i < readyCount ? "#d2b56a" : "#1a1e1c";
+        ctx.fillRect(bar.x + gap + i * (segW + gap), bar.y + 2, segW, Math.max(1, bar.height - 4));
+      }
+    }
+
     function drawLoader(room, player) {
       const rect = getLoaderRect(room);
       const parts = loaderParts(rect);
@@ -2272,6 +2310,7 @@
       ctx.textBaseline = "middle";
       ctx.fillText("LOADER", rect.x + rect.width / 2, rect.y + 14);
       drawLoaderHole(parts.hole, player);
+      drawLoaderAmmoBar(parts.bar, loaderReadyCount(player));
       drawLockLever(parts.lock, player.loaderLever || 0);
       let fireState = "dark";
       if (loaderFireLit(player)) fireState = "lit";
@@ -3450,26 +3489,6 @@
       }
       ctx.stroke();
 
-      const obstacles = battlefield.obstacles || [];
-      for (let i = 0; i < obstacles.length; i++) {
-        const obstacle = obstacles[i];
-        const center = axisFromGame(obstacle.x, obstacle.y);
-        if (obstacle.type === "tower") {
-          const spot = mapPoint(plot, center.x, center.y);
-          const radius = Math.max(1, (obstacle.r || 2) / spanX * plot.w);
-          ctx.fillStyle = "#c8c8d2";
-          ctx.beginPath();
-          ctx.arc(spot.x, spot.y, radius, 0, Math.PI * 2);
-          ctx.fill();
-        } else {
-          const wide = obstacle.w || 6;
-          const deep = obstacle.h || 6;
-          const corner = mapPoint(plot, center.x - wide / 2, center.y - deep / 2);
-          ctx.fillStyle = "#8a8a96";
-          ctx.fillRect(corner.x, corner.y, wide / spanX * plot.w, deep / spanY * plot.h);
-        }
-      }
-
       ctx.strokeStyle = "rgba(216, 255, 228, 0.9)";
       ctx.lineWidth = withLabels ? 1.5 : 1;
       ctx.strokeRect(plot.x + 0.5, plot.y + 0.5, Math.max(1, plot.w - 1), Math.max(1, plot.h - 1));
@@ -4314,7 +4333,12 @@
     function tryInteract(player, room) {
       // Stations stay shut until H.O.W.L.E.R has finished starting.
       // The start button watches the held key itself, so this press is ignored.
-      if (!machineStarted) return;
+      // A press on empty floor only closes the hand until the key comes up.
+      player.idleGrab = false;
+      if (!machineStarted) {
+        player.idleGrab = true;
+        return;
+      }
       if (player.panelOpen) {
         interactWithZoom(player, room);
         return;
@@ -4342,7 +4366,10 @@
         return;
       }
       const kind = stationNearHand(player, room);
-      if (!kind) return;
+      if (!kind) {
+        player.idleGrab = true;
+        return;
+      }
       if (kind === "joystick") {
         player.gripping = true;
         player.tiltX = 0;

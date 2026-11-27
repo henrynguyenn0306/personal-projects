@@ -400,7 +400,17 @@
       return group;
     }
 
+    // Obstacles stay in the simulation. This view draws them only for a debug load.
+    const SHOW_OBSTACLES = new URLSearchParams(window.location.search).get("debug") === "1";
+
     function syncObstacles() {
+      if (!SHOW_OBSTACLES) {
+        if (obstacleSignature !== "hidden") {
+          obstacleSignature = "hidden";
+          clearGroup(obstaclesGroup);
+        }
+        return;
+      }
       const obstacles = battlefield.obstacles || [];
       const signature = signatureOf(obstacles);
       if (signature === obstacleSignature) return;
