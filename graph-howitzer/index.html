@@ -182,7 +182,7 @@
     const SHELL_MAX_SPEED = 80;
     const SHELL_DAMAGE_PER_MPS = 2; // stored damage, applied when the blast overlaps the opponent
     const SHELL_BODY_RADIUS = 0.08; // the shell dot. In-air contact uses this, not the blast.
-    const SHELL_BLAST_RADIUS = 1.4 * 1.75; // outer radius of the X target circle on the battlefield
+    const SHELL_BLAST_RADIUS = 0.8; // meters. X circle, ground check, damage, and carving.
     const SHELL_OBSTACLE_HEIGHT = 8; // meters. Higher arcs pass over a footprint.
     const SHELL_OBSTACLE_HITS = 3; // a third blast removes the obstacle
     const SHELL_EXPLOSION_SECONDS = 0.8;
@@ -1229,7 +1229,7 @@
       ctx.fillRect(screenX, screenY, screenW, screenH);
 
       // Clear exists only on the opened status window, never on this room screen.
-      drawMessageList(player, screenX, screenY, screenW, screenH, MONITOR_FONT_SIZE, MONITOR_LINE_HEIGHT, false, 0);
+      drawMessageList(player, screenX, screenY, screenW, screenH, MONITOR_FONT_SIZE, MONITOR_LINE_HEIGHT, false);
       if (near && machineStarted) drawInteractOutline(rect);
     }
 
@@ -2304,6 +2304,7 @@
       return uRaw;
     }
 
+    // The shell dot, not the blast circle. A near miss of the shape is not a hit.
     function obstacleOuterSpan(x0, y0, x1, y1, obstacle) {
       const pad = SHELL_BODY_RADIUS;
       if (obstacle.type === "tower") {
@@ -4893,18 +4894,16 @@
       return lineHeight * 2 + 12;
     }
 
-    // How far Clear must drop so it stays under the zoom's close control, inside the glass.
-    function clearTopInset(panel, screenY) {
-      const close = closeButtonRect(panel);
-      return Math.max(0, close.y + close.height + 4 - (screenY + 6));
-    }
-
-    function monitorClearRect(screen, topInset) {
+    // Clear shares the Status row, on the right, inside the opened window only.
+    function monitorClearRect(screen, fontSize, lineHeight) {
       const width = 46;
       const height = 16;
-      const margin = 6;
+      const margin = 8;
+      const statusH = lineHeight * 2 + 8;
+      const barY = screen.y + screen.height - statusH;
+      const lineTop = barY + 6;
       let x = screen.x + screen.width - width - margin;
-      let y = screen.y + margin + (topInset || 0);
+      let y = lineTop + (fontSize - height) / 2;
       const left = screen.x + 2;
       const top = screen.y + 2;
       const right = screen.x + screen.width - 2;
@@ -4950,18 +4949,17 @@
       return lines.length ? lines : [text];
     }
 
-    function drawMessageList(player, screenX, screenY, screenW, screenH, fontSize, lineHeight, showClear, topInset) {
-      // Log on top, then a rule, then health and activity. Clear sits in the top-right of the log.
+    function drawMessageList(player, screenX, screenY, screenW, screenH, fontSize, lineHeight, showClear) {
+      // Log on top, then a rule, then the Status row and the State row. Clear sits on the Status row.
       const pad = 8;
       const screen = { x: screenX, y: screenY, width: screenW, height: screenH };
       const showStatus = machineStarted;
-      const clear = showStatus && showClear !== false ? monitorClearRect(screen, topInset) : null;
+      const clear = showStatus && showClear !== false ? monitorClearRect(screen, fontSize, lineHeight) : null;
       const statusH = showStatus ? lineHeight * 2 + 8 : 0;
       const logY = screenY + pad;
       const logBottom = screenY + screenH - (showStatus ? statusH + 4 : pad);
       const logH = Math.max(lineHeight, logBottom - logY);
-      const textRight = clear ? clear.x - 8 : screenX + screenW - pad;
-      const maxWidth = Math.max(8, textRight - (screenX + pad));
+      const maxWidth = Math.max(8, screenW - pad * 2);
 
       ctx.save();
       ctx.beginPath();
@@ -4998,9 +4996,10 @@
         ctx.lineTo(screenX + screenW - pad, barY);
         ctx.stroke();
         const textW = Math.max(8, screenW - pad * 2);
+        const statusTextW = clear ? Math.max(8, clear.x - 8 - (screenX + pad)) : textW;
         const health = healthStatusOf(healthPercent(player));
         const state = machineStateOf(player);
-        drawLabeledLine("Status: ", health.name + " (" + health.percent + "%)", health.color, screenX + pad, barY + 6, fontSize, textW);
+        drawLabeledLine("Status: ", health.name + " (" + health.percent + "%)", health.color, screenX + pad, barY + 6, fontSize, statusTextW);
         drawLabeledLine("State: ", state.text, state.color, screenX + pad, barY + 6 + lineHeight, fontSize, textW);
         if (clear) drawClearButton(clear);
       }
@@ -5160,8 +5159,7 @@
       if (player.panelKind !== "fire" && player.panelKind !== "radar" && player.panelKind !== "turret" && player.panelKind !== "map") {
         const view = zoomContent(room, player.panelKind);
         const screen = { x: view.screenX, y: view.screenY, width: view.screenW, height: view.screenH };
-        const topInset = clearTopInset(getZoomRect(room), view.screenY);
-        if (pointInRect(tip.x, tip.y, monitorClearRect(screen, topInset))) {
+        if (pointInRect(tip.x, tip.y, monitorClearRect(screen, MONITOR_FONT_SIZE, MONITOR_LINE_HEIGHT))) {
           clearMonitorLog(player);
           return;
         }
@@ -5330,7 +5328,7 @@
       } else if (player.panelKind === "map") {
         drawMapZoom(player, view);
       } else {
-        drawMessageList(player, screenX, screenY, screenW, screenH, MONITOR_FONT_SIZE, MONITOR_LINE_HEIGHT, true, clearTopInset(panel, screenY));
+        drawMessageList(player, screenX, screenY, screenW, screenH, MONITOR_FONT_SIZE, MONITOR_LINE_HEIGHT, true);
       }
 
       const button = closeButtonRect(panel);

@@ -83,8 +83,7 @@
     const OUTLINE_Y = 0.08;
     const SHAPE_Y = 0.14;
     const OUTLINE_PAD = 0.45;
-    const TARGET_MARK_SIZE = 1.4;
-    const TARGET_MARK_RADIUS = TARGET_MARK_SIZE * 1.75;
+    const SHELL_BLAST_RADIUS = 0.8; // meters. Same X circle the game uses for a blast.
     const SHELL_DOT_RADIUS = 2.2;
 
     // Default camera looks from the near-right, so game +y is toward the top of the view
@@ -860,22 +859,23 @@
     }
 
     function makeGroundX(color, at) {
-      const size = TARGET_MARK_SIZE;
+      const radius = SHELL_BLAST_RADIUS;
+      const arm = radius / 1.75;
       const lift = 0.22;
       const material = new THREE.LineBasicMaterial({ color: color });
       const first = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(at.x - size, lift, at.z - size),
-        new THREE.Vector3(at.x + size, lift, at.z + size)
+        new THREE.Vector3(at.x - arm, lift, at.z - arm),
+        new THREE.Vector3(at.x + arm, lift, at.z + arm)
       ]);
       const second = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(at.x - size, lift, at.z + size),
-        new THREE.Vector3(at.x + size, lift, at.z - size)
+        new THREE.Vector3(at.x - arm, lift, at.z + arm),
+        new THREE.Vector3(at.x + arm, lift, at.z - arm)
       ]);
       const group = new THREE.Group();
       group.add(new THREE.Line(first, material));
       group.add(new THREE.Line(second, material.clone()));
       const ring = new THREE.Mesh(
-        new THREE.RingGeometry(size * 1.25, size * 1.75, 28),
+        new THREE.RingGeometry(radius * (1.25 / 1.75), radius, 28),
         new THREE.MeshBasicMaterial({ color: color, side: THREE.DoubleSide })
       );
       ring.rotation.x = -Math.PI / 2;
@@ -1074,7 +1074,7 @@
           shellsGroup.add(dot);
         }
         if (!shell.blast) continue;
-        const radius = shell.blast.radius > 0 ? shell.blast.radius : TARGET_MARK_RADIUS;
+        const radius = shell.blast.radius > 0 ? shell.blast.radius : SHELL_BLAST_RADIUS;
         const life = Math.max(0, 1 - (Number(shell.blast.age) || 0) / 0.8);
         const blast = new THREE.Mesh(
           new THREE.SphereGeometry(radius, 18, 14),
