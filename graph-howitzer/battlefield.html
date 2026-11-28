@@ -83,7 +83,7 @@
     const SHAPE_Y = 0.14;
     const OUTLINE_PAD = 0.45;
     const SHELL_BLAST_RADIUS = 2.45; // meters. Same X circle the game uses for a blast.
-    const SHELL_DOT_RADIUS = 4.5; // meters. Visual only. Hit tests stay on the shell body.
+    const SHELL_DOT_RADIUS = 2.2;
 
     // Default camera looks from the near-right, so game +y is toward the top of the view
     // and the far-left corner (min x, max game y) sits at the top-left of the field.
@@ -500,7 +500,7 @@
     }
 
     function makeMachine(color, index) {
-      const shape = flatFootprint("rect", PLAYER_SIZE, PLAYER_SIZE, color);
+      const shape = flatFootprint("circle", PLAYER_SIZE / 2, PLAYER_SIZE / 2, color);
       const nose = new THREE.Mesh(
         new THREE.BoxGeometry(1.1, 0.16, 1.8),
         new THREE.MeshBasicMaterial({ color: 0x14141e })

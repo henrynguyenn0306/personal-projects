@@ -149,6 +149,8 @@
     const DECELERATION = 5; // m/s squared; slows down a bit faster than it speeds up
     const MOVE_STATUS_SPEED = 0.2; // m/s; slower than this, the activity returns to Idle
     const TURRET_TURN_SPEED = 30; // degrees per second toward the dial target, shortest way
+    const DIAL_HOLD_DELAY_MS = 280; // pause after the first step, then the arrow repeats
+    const DIAL_HOLD_SPEED = 30; // degrees per second while an arrow is held
     // Fuel is a percent. It falls only while the machine actually drives. It never refills by itself.
     const MAX_FUEL = 100;
     const FUEL_DRAIN_PER_METER = MAX_FUEL / 70; // a full tank lasts about 70 meters
@@ -191,6 +193,8 @@
     const SHELL_EXPLOSION_SECONDS = 0.8;
     const SHELL_STORAGE_COUNT = 8;
     const SHELL_CARRIED_LENGTH = 62; // carried and falling shell, in pixels
+    const SHELL_PRIMER_CUP = 0.36; // brass cup on the shell base, as a fraction of the base radius
+    const SHELL_PRIMER = 0.18; // dark primer inside that cup
     const LOADER_SLOT_COUNT = 3;
     const LOADER_LOAD_SECONDS = 2;
     const LOADER_RECOVER_SECONDS = 3;
@@ -444,21 +448,20 @@
       return { x: vx + dx * (step / dist), y: vy + dy * (step / dist) };
     }
 
-    // Two machines are squares of side PLAYER_SIZE. Overlap blocks; edges count as a touch.
-    function playerSquaresOverlap(x, y, other) {
-      return Math.abs(x - other.x) < PLAYER_SIZE && Math.abs(y - other.y) < PLAYER_SIZE;
+    // Two machines are circles of diameter PLAYER_SIZE. Overlap blocks; edges count as a touch.
+    function playerCirclesOverlap(x, y, other) {
+      return Math.hypot(x - other.x, y - other.y) < PLAYER_SIZE;
     }
 
     function playersTouch(a, b) {
-      return Math.abs(a.x - b.x) <= PLAYER_SIZE + CONTACT_EPSILON
-        && Math.abs(a.y - b.y) <= PLAYER_SIZE + CONTACT_EPSILON;
+      return Math.hypot(a.x - b.x, a.y - b.y) <= PLAYER_SIZE + CONTACT_EPSILON;
     }
 
     // True when this point is clear of obstacles and the other machine.
     function positionClear(x, y, index) {
       const other = battlefield.players[1 - index];
       if (collidesWithObstacle(x, y, PLAYER_SIZE / 2)) return false;
-      if (playerSquaresOverlap(x, y, other)) return false;
+      if (playerCirclesOverlap(x, y, other)) return false;
       return true;
     }
 
@@ -1849,11 +1852,11 @@
       ctx.strokeStyle = "rgb(110,78,40)";
       ctx.stroke();
       ctx.beginPath();
-      ctx.arc(cx, cy, radius * 0.22, 0, Math.PI * 2);
+      ctx.arc(cx, cy, radius * SHELL_PRIMER_CUP, 0, Math.PI * 2);
       ctx.fillStyle = "rgb(74,52,28)";
       ctx.fill();
       ctx.beginPath();
-      ctx.arc(cx, cy, radius * 0.08, 0, Math.PI * 2);
+      ctx.arc(cx, cy, radius * SHELL_PRIMER, 0, Math.PI * 2);
       ctx.fillStyle = "rgb(36,24,14)";
       ctx.fill();
     }
@@ -2301,25 +2304,36 @@
       return { lo: lo, hi: hi };
     }
 
-    // In the air the shell is its own small dot against the footprint. The blast is
-    // placed where the path is closest to the opponent's center, so a shot aimed
-    // through the center is not stopped on the near face.
+    // In the air the shell is its own small dot against the circular footprint. The
+    // blast is placed where the path is closest to the opponent's center, so a shot
+    // aimed through the center is not stopped on the near edge.
     function opponentU(x0, y0, z0, x1, y1, z1, enemy) {
-      const half = PLAYER_SIZE / 2 + SHELL_BODY_RADIUS;
-      const span = segmentRectSpan(
-        x0, y0, x1, y1,
-        enemy.x - half, enemy.x + half, enemy.y - half, enemy.y + half
-      );
-      if (!span) return null;
+      const radius = PLAYER_SIZE / 2 + SHELL_BODY_RADIUS;
       const heights = heightUSpan(z0, z1, PLAYER_SIZE);
       if (!heights) return null;
-      const band = overlapSpan(span.enter, span.exit, heights.lo, heights.hi);
-      if (!band) return null;
       const dx = x1 - x0;
       const dy = y1 - y0;
-      const len2 = dx * dx + dy * dy;
-      let uRaw = band.lo;
-      if (len2 > 1e-12) uRaw = ((enemy.x - x0) * dx + (enemy.y - y0) * dy) / len2;
+      const fx = x0 - enemy.x;
+      const fy = y0 - enemy.y;
+      const a = dx * dx + dy * dy;
+      let enter = 0;
+      let exit = 1;
+      let uRaw = 0;
+      if (a < 1e-12) {
+        if (fx * fx + fy * fy > radius * radius) return null;
+      } else {
+        const b = 2 * (fx * dx + fy * dy);
+        const c = fx * fx + fy * fy - radius * radius;
+        const disc = b * b - 4 * a * c;
+        if (disc < 0) return null;
+        const root = Math.sqrt(disc);
+        enter = (-b - root) / (2 * a);
+        exit = (-b + root) / (2 * a);
+        uRaw = ((enemy.x - x0) * dx + (enemy.y - y0) * dy) / a;
+      }
+      if (exit < 0 || enter > 1) return null;
+      const band = overlapSpan(Math.max(0, enter), Math.min(1, exit), heights.lo, heights.hi);
+      if (!band) return null;
       if (uRaw > 1 + 1e-4 && band.hi >= 1 - 1e-4) return null;
       if (uRaw < band.lo) return band.lo;
       if (uRaw > band.hi) return band.hi;
@@ -2609,11 +2623,11 @@
       ctx.strokeStyle = mixBoreColor([110, 78, 40], black, eased);
       ctx.stroke();
       ctx.beginPath();
-      ctx.arc(hole.cx, hole.cy, radius * 0.22, 0, Math.PI * 2);
+      ctx.arc(hole.cx, hole.cy, radius * SHELL_PRIMER_CUP, 0, Math.PI * 2);
       ctx.fillStyle = mixBoreColor([74, 52, 28], black, eased);
       ctx.fill();
       ctx.beginPath();
-      ctx.arc(hole.cx, hole.cy, radius * 0.08, 0, Math.PI * 2);
+      ctx.arc(hole.cx, hole.cy, radius * SHELL_PRIMER, 0, Math.PI * 2);
       ctx.fillStyle = mixBoreColor([36, 24, 14], black, eased);
       ctx.fill();
       ctx.restore();
@@ -2870,7 +2884,7 @@
       else if (loaderRecovering(player) && loaderLeverDown(player)) fireState = "recover";
       drawLoaderFireButton(parts.fire, fireState);
       ctx.restore();
-      if (machineStarted && handOverLoaderHole(player, parts.hole)) drawHoleHighlight(parts.hole);
+      if (machineStarted && player.carryingShell && handOverLoaderHole(player, parts.hole)) drawHoleHighlight(parts.hole);
     }
 
     function pressLoader(player, room) {
@@ -3475,17 +3489,13 @@
           }
         }
         if (!shell.alive) continue;
-        const dotR = Math.max(9, arm + 5);
-        ctx.beginPath();
-        ctx.arc(px(shell.distance), py(shell.height), dotR, 0, Math.PI * 2);
         ctx.fillStyle = "#ffe14a";
+        ctx.beginPath();
+        ctx.arc(px(shell.distance), py(shell.height), Math.max(5, arm), 0, Math.PI * 2);
         ctx.fill();
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = "#1a1408";
-        ctx.stroke();
         ctx.fillStyle = "#fff6d0";
         ctx.beginPath();
-        ctx.arc(px(shell.distance), py(shell.height), Math.max(3.5, dotR * 0.4), 0, Math.PI * 2);
+        ctx.arc(px(shell.distance), py(shell.height), Math.max(2, arm * 0.45), 0, Math.PI * 2);
         ctx.fill();
       }
     }
@@ -3699,33 +3709,31 @@
       return actual;
     }
 
-    // One rotating line for the whole slew, including a drag. The lock is a new line.
-    function noteTurretTurning(player, label) {
-      const text = "> Turret: Rotating to " + label + "...";
-      const line = player.turretLogLine;
-      if (!line || player.messages.indexOf(line) === -1) {
-        player.turretLogLine = { text: text, color: COLOR_MONITOR_TEXT, kind: "turret-turn" };
-        player.messages.push(player.turretLogLine);
+    // The dial sets the target. The barrel catches up in updateTurret. Turning is silent.
+    function setTurretAngle(player, degrees) {
+      player.targetAngle = wrapAngle(degrees);
+    }
+
+    // A held arrow steps once, waits, then turns at a steady rate while the fingertip stays on it.
+    function updateDialHold(player, dt) {
+      const key = player === player1 ? INTERACT_KEY_P1 : INTERACT_KEY_P2;
+      const holding = player.dialHold === "ccw" || player.dialHold === "cw";
+      if (!holding || !keys[key] || player.panelKind !== "turret" || player.dialHover !== player.dialHold) {
+        if (!keys[key] || player.panelKind !== "turret") player.dialHold = "";
+        player.dialHoldCarry = 0;
         return;
       }
-      if (line.text !== text) line.text = text;
-    }
-
-    function noteTurretLocked(player, label) {
-      player.turretLogLine = null;
-      addStatusMessage(player, "> Turret: Locked at " + label + ".");
-    }
-
-    // The dial sets the target. The barrel catches up in updateTurret.
-    function setTurretAngle(player, degrees) {
-      const next = wrapAngle(degrees);
-      player.targetAngle = next;
-      if (!machineStarted) return;
-      if (Math.abs(shortestTurn(player.actualAngle, next)) <= 0.05) return;
-      noteTurretTurning(player, angleText(next));
+      if (frameTime - player.pointPressFrom < DIAL_HOLD_DELAY_MS) return;
+      const dir = player.dialHold === "ccw" ? -1 : 1;
+      player.dialHoldCarry = (player.dialHoldCarry || 0) + DIAL_HOLD_SPEED * Math.max(0, dt);
+      const steps = Math.floor(player.dialHoldCarry);
+      if (steps <= 0) return;
+      player.dialHoldCarry -= steps;
+      nudgeTurret(player, dir * steps);
     }
 
     function updateTurret(player, dt) {
+      updateDialHold(player, dt);
       const target = wrapAngle(player.targetAngle);
       player.targetAngle = target;
       const actual = wrapAngle(player.actualAngle);
@@ -3733,10 +3741,7 @@
       const step = TURRET_TURN_SPEED * Math.max(0, dt);
       if (Math.abs(delta) <= step) player.actualAngle = target;
       else player.actualAngle = wrapAngle(actual + Math.sign(delta) * step);
-      const busy = Math.abs(shortestTurn(player.actualAngle, target)) > 0.001;
-      player.turretBusy = busy;
-      if (!machineStarted) return;
-      if (!busy && player.turretLogLine) noteTurretLocked(player, angleText(target));
+      player.turretBusy = Math.abs(shortestTurn(player.actualAngle, target)) > 0.001;
     }
 
     function angleFromPointer(cx, cy, x, y) {
@@ -3750,10 +3755,16 @@
     }
 
     // Circle, degree line, and optional ±1° buttons. The widget is centered in the box.
+    // The arrows sit under the dial, about as wide as the circle, with a gap so they
+    // do not crowd the ring or the degree readout.
     function turretDialParts(box, withButtons) {
-      const buttonH = withButtons ? Math.max(24, Math.min(32, box.height * 0.18)) : Math.max(13, Math.min(18, box.height * 0.2));
-      const gap = 4;
-      const r = Math.max(8, Math.min(box.width, box.height - buttonH - gap) / 2 - 2);
+      const gap = withButtons ? 12 : 4;
+      let buttonH = withButtons ? 0 : Math.max(13, Math.min(18, box.height * 0.2));
+      let r = Math.max(8, Math.min(box.width, box.height - buttonH - gap) / 2 - 2);
+      if (withButtons) {
+        buttonH = Math.max(28, Math.min(42, r * 0.2));
+        r = Math.max(8, Math.min(box.width, box.height - buttonH - gap) / 2 - 2);
+      }
       const widgetH = r * 2 + gap + buttonH;
       const top = box.y + Math.max(0, (box.height - widgetH) / 2);
       const cx = box.x + box.width / 2;
@@ -3764,10 +3775,17 @@
       let cw = null;
       let label = { x: box.x, y: rowY, width: box.width, height: rowH };
       if (withButtons) {
-        const bw = Math.min(34, Math.max(22, box.width * 0.24));
-        ccw = { x: box.x, y: rowY, width: bw, height: rowH };
-        cw = { x: box.x + box.width - bw, y: rowY, width: bw, height: rowH };
-        label = { x: box.x + bw, y: rowY, width: Math.max(8, box.width - bw * 2), height: rowH };
+        const bw = Math.max(34, Math.min(52, r * 0.28));
+        const span = Math.min(box.width, Math.max(r * 2, bw * 2 + 64));
+        const spanLeft = box.x + (box.width - span) / 2;
+        ccw = { x: spanLeft, y: rowY, width: bw, height: rowH };
+        cw = { x: spanLeft + span - bw, y: rowY, width: bw, height: rowH };
+        label = {
+          x: spanLeft + bw + 8,
+          y: rowY,
+          width: Math.max(8, span - bw * 2 - 16),
+          height: rowH
+        };
       }
       return { box: box, cx: cx, cy: cy, r: r, ccw: ccw, cw: cw, label: label };
     }
@@ -3899,8 +3917,8 @@
       drawDialMarks(parts, withButtons, player.dialHover);
 
       const color = player === player1 ? COLOR_P1 : COLOR_P2;
-      if (player.turretBusy) drawTurretNeedle(parts, player.targetAngle, color, 0.32, 0.5, 0.8);
-      drawTurretNeedle(parts, player.actualAngle, color, 1, 1, 0.74);
+      if (player.turretBusy) drawTurretNeedle(parts, player.targetAngle, color, 0.32, 0.55, 0.68);
+      drawTurretNeedle(parts, player.actualAngle, color, 1, 1, 0.62);
       ctx.beginPath();
       ctx.arc(parts.cx, parts.cy, Math.max(2.5, parts.r * 0.09), 0, Math.PI * 2);
       ctx.fillStyle = color;
@@ -3920,8 +3938,8 @@
       ctx.fillText(readout, parts.label.x + parts.label.width / 2, parts.label.y + parts.label.height / 2);
 
       if (parts.ccw && parts.cw) {
-        drawDialNudge(parts.ccw, "◀", player.dialHover === "ccw");
-        drawDialNudge(parts.cw, "▶", player.dialHover === "cw");
+        drawDialNudge(parts.ccw, -1, player.dialHover === "ccw");
+        drawDialNudge(parts.cw, 1, player.dialHover === "cw");
       }
       ctx.restore();
       return parts;
@@ -3934,7 +3952,7 @@
       ctx.save();
       ctx.globalAlpha = alpha;
       ctx.strokeStyle = color;
-      ctx.lineWidth = Math.max(1.5, parts.r * 0.09 * widthScale);
+      ctx.lineWidth = Math.max(1.5, parts.r * 0.055 * widthScale);
       ctx.lineCap = "round";
       ctx.beginPath();
       ctx.moveTo(parts.cx - nx * parts.r * 0.16, parts.cy - ny * parts.r * 0.16);
@@ -3943,7 +3961,7 @@
       ctx.restore();
     }
 
-    function drawDialNudge(rect, label, hot) {
+    function drawDialNudge(rect, dir, hot) {
       ctx.fillStyle = hot ? "#1c3a28" : "#101014";
       ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
       if (hot) {
@@ -3951,11 +3969,22 @@
         ctx.lineWidth = 1;
         ctx.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.width - 1, rect.height - 1);
       }
+      const insetX = rect.width * 0.3;
+      const insetY = rect.height * 0.26;
+      const midY = rect.y + rect.height / 2;
       ctx.fillStyle = COLOR_JOYSTICK_LABEL_TEXT;
-      ctx.font = "bold " + Math.max(11, Math.min(15, Math.floor(rect.height * 0.55))) + "px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(label, rect.x + rect.width / 2, rect.y + rect.height / 2);
+      ctx.beginPath();
+      if (dir < 0) {
+        ctx.moveTo(rect.x + insetX, midY);
+        ctx.lineTo(rect.x + rect.width - insetX, rect.y + insetY);
+        ctx.lineTo(rect.x + rect.width - insetX, rect.y + rect.height - insetY);
+      } else {
+        ctx.moveTo(rect.x + rect.width - insetX, midY);
+        ctx.lineTo(rect.x + insetX, rect.y + insetY);
+        ctx.lineTo(rect.x + insetX, rect.y + rect.height - insetY);
+      }
+      ctx.closePath();
+      ctx.fill();
     }
 
     function dialUnderPoint(player, room) {
@@ -4102,7 +4131,28 @@
       ctx.restore();
     }
 
-    // Top-down field. No machines and no firing arcs.
+    // Both machines, drawn as circles the same diameter as their hitbox.
+    function drawMapMachines(plot, spanX, spanY) {
+      const units = battlefield.players || [];
+      const colors = [COLOR_P1, COLOR_P2];
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(plot.x, plot.y, plot.w, plot.h);
+      ctx.clip();
+      for (let i = 0; i < units.length; i++) {
+        const unit = units[i];
+        const axis = axisFromGame(unit.x, unit.y);
+        const spot = mapPoint(plot, axis.x, axis.y);
+        const radius = Math.max(2, (PLAYER_SIZE / 2) / spanX * plot.w);
+        ctx.beginPath();
+        ctx.arc(spot.x, spot.y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = colors[i] || COLOR_P1;
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    // Top-down field. The opened map draws both machines as circles. No firing arcs.
     function drawBattlefieldMap(box, withLabels, player, showObstacles) {
       const plot = battlefieldMapPlot(box, withLabels);
       const spanX = FIELD_X_MAX * 2;
@@ -4147,6 +4197,8 @@
         }
         ctx.restore();
       }
+
+      if (withLabels) drawMapMachines(plot, spanX, spanY);
 
       ctx.strokeStyle = "rgba(216, 255, 228, 0.9)";
       ctx.lineWidth = withLabels ? 1.5 : 1;
@@ -4696,7 +4748,7 @@
           ctx.arc(
             centerX + enemyDx * scale,
             centerY - enemyDy * scale,
-            Math.max(4, rangePx * RADAR_ENEMY_DOT_RATIO),
+            (PLAYER_SIZE / 2) * scale,
             0,
             Math.PI * 2
           );
@@ -4730,11 +4782,13 @@
       drawRadarSweep(centerX, centerY, rangePx);
       drawRadarRangeRings(centerX, centerY, rangePx, showBlips);
 
-      // Zoomed radar only: the machine's square footprint, darker than the contacts.
+      // Zoomed radar only: the machine's circular footprint, darker than the contacts.
       if (showBlips) {
-        const side = PLAYER_SIZE * (rangePx / RADAR_RANGE);
+        const radius = (PLAYER_SIZE / 2) * (rangePx / RADAR_RANGE);
         ctx.fillStyle = "#145c32";
-        ctx.fillRect(centerX - side / 2, centerY - side / 2, side, side);
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+        ctx.fill();
       }
 
       ctx.fillStyle = COLOR_RADAR_YOU;
@@ -5185,9 +5239,12 @@
         player.pointPressIndex = -1;
         if (dialHit === "ccw" || dialHit === "cw") {
           player.dialDrag = false;
+          player.dialHold = dialHit;
+          player.dialHoldCarry = 0;
           nudgeTurret(player, dialHit === "ccw" ? -1 : 1);
           return;
         }
+        player.dialHold = "";
         if (dialHit.indexOf("mark:") === 0) {
           player.dialDrag = false;
           setTurretAngle(player, Number(dialHit.slice(5)));
@@ -5868,10 +5925,7 @@
     }
 
     function circleOverlapsMachine(x, y, radius, unit) {
-      const half = PLAYER_SIZE / 2;
-      const nearestX = Math.max(unit.x - half, Math.min(x, unit.x + half));
-      const nearestY = Math.max(unit.y - half, Math.min(y, unit.y + half));
-      return Math.hypot(x - nearestX, y - nearestY) <= radius;
+      return Math.hypot(x - unit.x, y - unit.y) <= radius + PLAYER_SIZE / 2;
     }
 
     // Circle vs rectangle (building) and circle vs circle (tower), minus blast holes.
